@@ -24,7 +24,11 @@ const position = {
 };
 const note = z.object({ id, ...appearance, ...position });
 const cursor = z.object({ x: coordinate(BOARD_WIDTH), y: coordinate(BOARD_HEIGHT) }).nullable();
-const name = z.string().trim().min(1).refine((value) => value.length <= MAX_NAME);
+const name = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => value.length <= MAX_NAME);
 const drag = { id, ...position };
 
 export const clientMessage = z.discriminatedUnion("type", [
@@ -41,7 +45,11 @@ export const serverMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("board.snapshot"), notes: z.array(note) }),
   z.object({ type: z.literal("note.updated"), note, movedBy: id.optional(), requestId }),
   z.object({ type: z.literal("note.removed"), id }),
-  z.object({ type: z.literal("board.error"), reason: z.enum(["full", "missing", "storage"]), requestId }),
+  z.object({
+    type: z.literal("board.error"),
+    reason: z.enum(["full", "missing", "storage"]),
+    requestId,
+  }),
   z.object({ type: z.literal("presence.request") }),
   z.object({ type: z.literal("presence.cursor"), peer: id, name, cursor }),
   z.object({ type: z.literal("presence.drag"), peer: id, ...drag }),
