@@ -32,9 +32,10 @@ const name = z
 const drag = { id, ...position };
 
 export const clientMessage = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("board.sync"), requestId }),
   z.object({ type: z.literal("note.add"), note, requestId }),
   z.object({ type: z.literal("note.edit"), id, ...appearance, requestId }),
-  z.object({ type: z.literal("note.move"), id, ...position }),
+  z.object({ type: z.literal("note.move"), id, ...position, requestId }),
   z.object({ type: z.literal("note.remove"), id }),
   z.object({ type: z.literal("presence.cursor"), name, cursor }),
   z.object({ type: z.literal("presence.drag"), ...drag }),
@@ -42,7 +43,7 @@ export const clientMessage = z.discriminatedUnion("type", [
 ]);
 
 export const serverMessage = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("board.snapshot"), notes: z.array(note) }),
+  z.object({ type: z.literal("board.snapshot"), notes: z.array(note), requestId }),
   z.object({ type: z.literal("note.updated"), note, movedBy: id.optional(), requestId }),
   z.object({ type: z.literal("note.removed"), id }),
   z.object({

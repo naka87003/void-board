@@ -64,7 +64,7 @@ const editing = ref(false);
 const pendingSave = ref<string>();
 const saveError = ref("");
 const saveTimeout = useTimeoutFn(interruptSave, 10_000, { immediate: false });
-const feedback = ref("");
+const feedback = ref<{ kind: "sync-error" } | { kind: "error"; message: string }>();
 const drag = ref<{
   id: string;
   pointer: number;
@@ -76,14 +76,18 @@ const drag = ref<{
 let dialogOpener: HTMLElement | undefined;
 let pointerPosition: { clientX: number; clientY: number } | undefined;
 
-const { status, notes, presence, connectBoard, sendMessage } = useBoardConnection(
-  board,
-  () => displayName.value,
-  {
-    onSnapshot: updateCursorPosition,
+const { status, notes, pendingPosition, presence, connectBoard, sendMessage, moveNote } =
+  useBoardConnection(board, () => displayName.value, {
+    onSnapshot() {
+      if (feedback.value?.kind === "sync-error") feedback.value = undefined;
+      updateCursorPosition();
+    },
     onDisconnect() {
       drag.value = undefined;
       interruptSave();
+    },
+    onSyncError() {
+      feedback.value = { kind: "sync-error" };
     },
     onSave(requestId, note) {
       if (requestId !== pendingSave.value) return;
@@ -103,14 +107,13 @@ const { status, notes, presence, connectBoard, sendMessage } = useBoardConnectio
         storage: "Couldn’t save your changes. Please try again.",
       }[reason];
       if (!requestId) {
-        feedback.value = message;
+        feedback.value = { kind: "error", message };
       } else if (requestId === pendingSave.value) {
         finishSave();
         saveError.value = message;
       }
     },
-  },
-);
+  });
 const { cursors, notePreviews } = presence;
 const statusLabel = computed(
   () =>
@@ -156,7 +159,7 @@ async function copyBoardLink() {
 
 function send(message: ClientMessage) {
   if (!sendMessage(message)) return false;
-  feedback.value = "";
+  feedback.value = undefined;
   return true;
 }
 
@@ -227,7 +230,7 @@ function openEditor(event: MouseEvent, note?: Note) {
     draft.value = { ...note };
   } else {
     if (notes.value.length >= MAX_NOTES) {
-      feedback.value = "This board has reached its note limit.";
+      feedback.value = { kind: "error", message: "This board has reached its note limit." };
       return;
     }
 
@@ -289,15 +292,16 @@ function removeNote() {
 function startDrag(event: PointerEvent, note: Note) {
   if (event.button !== 0 || status.value !== "ready" || drag.value || !viewport.value) return;
   const bounds = viewport.value.getBoundingClientRect();
+  const { x, y } = pendingPosition(note.id) ?? note;
   const handle = event.currentTarget as HTMLElement;
   handle.setPointerCapture(event.pointerId);
   drag.value = {
     id: note.id,
     pointer: event.pointerId,
-    offsetX: event.clientX - bounds.left + viewport.value.scrollLeft - note.x,
-    offsetY: event.clientY - bounds.top + viewport.value.scrollTop - note.y,
-    x: note.x,
-    y: note.y,
+    offsetX: event.clientX - bounds.left + viewport.value.scrollLeft - x,
+    offsetY: event.clientY - bounds.top + viewport.value.scrollTop - y,
+    x,
+    y,
   };
 }
 
@@ -324,17 +328,23 @@ function finishDrag(event: PointerEvent) {
   }
 
   presence.endDrag();
-  drag.value = undefined;
-  const note = notes.value.find((item) => item.id === active.id);
-  if (event.type === "pointerup" && note && (note.x !== active.x || note.y !== active.y)) {
-    send({ type: "note.move", id: active.id, x: active.x, y: active.y });
+  const previous = pendingPosition(active.id) ?? notes.value.find((note) => note.id === active.id);
+  if (
+    event.type === "pointerup" &&
+    previous &&
+    (previous.x !== active.x || previous.y !== active.y) &&
+    moveNote(active.id, active)
+  ) {
+    feedback.value = undefined;
   } else {
     sendMessage({ type: "presence.drag-cancelled" });
   }
+  drag.value = undefined;
 }
 
 function notePosition(note: Note) {
-  return drag.value?.id === note.id ? drag.value : (notePreviews.value.get(note.id) ?? note);
+  if (drag.value?.id === note.id) return drag.value;
+  return pendingPosition(note.id) ?? notePreviews.value.get(note.id) ?? note;
 }
 
 function moveWithKey(event: KeyboardEvent, note: Note) {
@@ -349,11 +359,10 @@ function moveWithKey(event: KeyboardEvent, note: Note) {
 
   event.preventDefault();
   const step = event.shiftKey ? 48 : 12;
-  send({
-    type: "note.move",
-    id: note.id,
-    ...boundedPosition(note.x + delta[0] * step, note.y + delta[1] * step),
-  });
+  const { x, y } = pendingPosition(note.id) ?? note;
+  if (moveNote(note.id, boundedPosition(x + delta[0] * step, y + delta[1] * step))) {
+    feedback.value = undefined;
+  }
 }
 </script>
 
@@ -415,7 +424,8 @@ function moveWithKey(event: KeyboardEvent, note: Note) {
                 note.color,
                 {
                   dragging: drag?.id === note.id,
-                  'remote-dragging': drag?.id !== note.id && notePreviews.has(note.id),
+                  'remote-dragging':
+                    drag?.id !== note.id && !pendingPosition(note.id) && notePreviews.has(note.id),
                 },
               ]"
               :style="{
@@ -521,13 +531,13 @@ function moveWithKey(event: KeyboardEvent, note: Note) {
       >
         <CircleAlert aria-hidden="true" />
         <AlertDescription class="flex items-center gap-3">
-          {{ feedback }}
+          {{ feedback.kind === "sync-error" ? "Couldn’t refresh the board." : feedback.message }}
           <Button
             variant="ghost"
             size="icon-sm"
             type="button"
             aria-label="Dismiss notification"
-            @click="feedback = ''"
+            @click="feedback = undefined"
           >
             <X aria-hidden="true" />
           </Button>

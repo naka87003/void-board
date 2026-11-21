@@ -27,6 +27,26 @@ export default defineRoom({
   async onMessage(ctx, event) {
     const peer = ctx.connection.id;
     switch (event.type) {
+      case "board.sync": {
+        let notes;
+        try {
+          notes = await ctx.storage.list<Note>({ prefix: notePrefix });
+        } catch (error) {
+          console.error("Unable to read board", error);
+          await ctx.connection.send({
+            type: "board.error",
+            reason: "storage",
+            requestId: event.requestId,
+          });
+          return;
+        }
+        await ctx.connection.send({
+          type: "board.snapshot",
+          notes: [...notes.values()],
+          requestId: event.requestId,
+        });
+        return;
+      }
       case "presence.cursor":
       case "presence.drag":
       case "presence.drag-cancelled":
