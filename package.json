@@ -7,6 +7,8 @@
     "dev": "vp dev",
     "build": "vp build",
     "typecheck": "void prepare && vue-tsc --noEmit",
+    "test": "vp test",
+    "fmt": "vp fmt",
     "deploy": "void deploy --platform cloudflare",
     "preview": "vp preview",
     "postinstall": "void prepare"
