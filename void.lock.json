@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "source": {
+    "name": "void-board",
+    "compatibility_date": "2026-11-16",
+    "compatibility_flags": ["nodejs_compat"]
+  },
+  "resolved": {
+    "name": "void-board",
+    "compatibility_date": "2026-11-16",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+      "bindings": [
+        {
+          "name": "BoardsBoardWs",
+          "class_name": "BoardsBoardWs"
+        }
+      ]
+    },
+    "migrations": [
+      {
+        "tag": "void-ws-v1",
+        "new_sqlite_classes": ["BoardsBoardWs"]
+      }
+    ]
+  },
+  "text": "{\n  \"name\": \"void-board\",\n  \"compatibility_date\": \"2026-11-16\",\n  \"compatibility_flags\": [\n    \"nodejs_compat\"\n  ],\n  \"durable_objects\": {\n    \"bindings\": [\n      {\n        \"name\": \"BoardsBoardWs\",\n        \"class_name\": \"BoardsBoardWs\"\n      }\n    ]\n  },\n  \"migrations\": [\n    {\n      \"tag\": \"void-ws-v1\",\n      \"new_sqlite_classes\": [\n        \"BoardsBoardWs\"\n      ]\n    }\n  ]\n}\n"
+}
