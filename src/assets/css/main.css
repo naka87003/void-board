@@ -5,6 +5,10 @@
   color-scheme: dark;
 }
 
+.dark {
+  --ui-primary: white;
+}
+
 @layer base {
   button:not(:disabled) {
     cursor: pointer;
