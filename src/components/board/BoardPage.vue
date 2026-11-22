@@ -1,44 +1,29 @@
 <script setup lang="ts">
 import UAlert from "@nuxt/ui/components/Alert.vue";
-import UApp from "@nuxt/ui/components/App.vue";
 import UBadge from "@nuxt/ui/components/Badge.vue";
 import UButton from "@nuxt/ui/components/Button.vue";
-import UCard from "@nuxt/ui/components/Card.vue";
-import UFormField from "@nuxt/ui/components/FormField.vue";
-import UInput from "@nuxt/ui/components/Input.vue";
-import UModal from "@nuxt/ui/components/Modal.vue";
-import URadioGroup from "@nuxt/ui/components/RadioGroup.vue";
-import UTextarea from "@nuxt/ui/components/Textarea.vue";
 import { useEventListener, useSessionStorage, useTimeoutFn } from "@vueuse/core";
 import { computed, ref, useTemplateRef, watch } from "vue";
+import { routeUrl } from "void/routes";
 import {
   BOARD_HEIGHT,
   BOARD_WIDTH,
   MAX_NAME,
   MAX_NOTES,
-  MAX_TEXT,
   NOTE_HEIGHT,
   NOTE_WIDTH,
-  colors,
-  idPattern,
   type ClientMessage,
   type Note,
-} from "../shared/board";
-import voidLogo from "@/assets/void-logo.svg";
-import BoardCanvas from "@/components/board/BoardCanvas.vue";
-import BoardNote from "@/components/board/BoardNote.vue";
-import BoardShareDialog from "@/components/board/BoardShareDialog.vue";
-import { noteColors } from "@/components/board/note-colors";
+} from "../../../shared/board";
+import AppShell from "@/components/AppShell.vue";
+import BoardCanvas from "./BoardCanvas.vue";
+import BoardNameDialog from "./BoardNameDialog.vue";
+import BoardNote from "./BoardNote.vue";
+import BoardNoteDialog from "./BoardNoteDialog.vue";
+import BoardShareDialog from "./BoardShareDialog.vue";
 import { useBoardConnection } from "@/composables/board-connection";
 
-const colorOptions = colors.map((value) => ({ value, ...noteColors[value] }));
-const modalContent = {
-  onPointerDownOutside: (event: Event) => event.preventDefault(),
-  onCloseAutoFocus: restoreDialogFocus,
-};
-
-const requestedBoard = new URLSearchParams(location.search).get("board");
-const board = requestedBoard && idPattern.test(requestedBoard) ? requestedBoard : null;
+const { boardId } = defineProps<{ boardId: string }>();
 const canvas = useTemplateRef("canvas");
 const viewport = computed(() => canvas.value?.viewport);
 const editorOpen = ref(false);
@@ -49,7 +34,7 @@ const storedName = useSessionStorage("void-board.displayName", "", {
 const legacyName = sessionStorage.getItem("yohaku.displayName")?.trim().slice(0, MAX_NAME) ?? "";
 const displayName = computed(() => storedName.value.trim().slice(0, MAX_NAME) || legacyName);
 const choosingInitialName = ref(!displayName.value);
-const nameDialogOpen = ref(Boolean(board && choosingInitialName.value));
+const nameDialogOpen = ref(choosingInitialName.value);
 const nameDraft = ref("");
 const draft = ref<Note>();
 const editing = ref(false);
@@ -70,7 +55,7 @@ let dialogOpener: HTMLElement | undefined;
 let pointerPosition: { clientX: number; clientY: number } | undefined;
 
 const { status, notes, pendingPosition, presence, connectBoard, sendMessage, moveNote } =
-  useBoardConnection(board, () => displayName.value, {
+  useBoardConnection(boardId, () => displayName.value, {
     onSnapshot() {
       if (feedback.value?.kind === "sync-error") feedback.value = undefined;
       updateCursorPosition();
@@ -123,13 +108,12 @@ const statusLabel = computed(
     })[status.value],
 );
 
-const boardUrl = board ? new URL("?board=" + board, location.origin).href : "";
+const boardUrl = new URL(
+  routeUrl("/boards/[board]", { params: { board: boardId } }),
+  location.origin,
+).href;
 
-if (board) useEventListener(window, "blur", clearPointer);
-
-function createBoard() {
-  location.assign("?board=" + crypto.randomUUID());
-}
+useEventListener(window, "blur", clearPointer);
 
 function restoreDialogFocus(event: Event) {
   event.preventDefault();
@@ -352,239 +336,115 @@ function moveWithKey(event: KeyboardEvent, note: Note) {
 </script>
 
 <template>
-  <UApp :toaster="null">
-    <div class="flex min-h-dvh flex-col">
-      <header class="border-b border-default">
-        <div
-          class="mx-auto flex h-16 max-w-screen-2xl items-center justify-between gap-2 px-4 sm:px-6"
+  <AppShell>
+    <template #header-actions>
+      <div class="flex items-center gap-2 sm:gap-4">
+        <UBadge
+          :color="status === 'ready' ? 'success' : 'neutral'"
+          :variant="status === 'ready' ? 'soft' : 'outline'"
+          role="status"
         >
-          <a
-            class="inline-flex shrink-0 items-center rounded-sm"
-            href="/"
-            aria-label="Void Board home"
-          >
-            <img :src="voidLogo" class="h-4 w-auto" width="270" height="58" alt="" />
-          </a>
-          <div v-if="board" class="flex items-center gap-2 sm:gap-4">
-            <UBadge
-              :color="status === 'ready' ? 'success' : 'neutral'"
-              :variant="status === 'ready' ? 'soft' : 'outline'"
-              role="status"
-            >
-              {{ statusLabel }}
-            </UBadge>
-            <BoardShareDialog :url="boardUrl" />
-          </div>
+          {{ statusLabel }}
+        </UBadge>
+        <BoardShareDialog :url="boardUrl" />
+      </div>
+    </template>
+
+    <main
+      class="mx-auto flex h-[calc(100dvh-4rem)] min-h-96 w-full max-w-screen-2xl flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6"
+    >
+      <div class="flex items-center justify-between gap-3">
+        <div>
+          <h1 class="text-xl font-semibold tracking-tight text-highlighted sm:text-2xl">
+            Sticky note board
+          </h1>
+          <p class="text-sm text-muted">
+            {{ notes.length }} {{ notes.length === 1 ? "note" : "notes" }}
+          </p>
         </div>
-      </header>
-
-      <main
-        v-if="board"
-        class="mx-auto flex h-[calc(100dvh-4rem)] min-h-96 w-full max-w-screen-2xl flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6"
-      >
-        <div class="flex items-center justify-between gap-3">
-          <div>
-            <h1 class="text-xl font-semibold tracking-tight text-highlighted sm:text-2xl">
-              Sticky note board
-            </h1>
-            <p class="text-sm text-muted">
-              {{ notes.length }} {{ notes.length === 1 ? "note" : "notes" }}
-            </p>
-          </div>
-          <UButton
-            icon="i-lucide-plus"
-            label="Add note"
-            :disabled="status !== 'ready'"
-            @click="openEditor"
-          />
-        </div>
-
-        <BoardCanvas
-          ref="canvas"
-          :cursors="cursors"
-          :show-empty="status === 'ready' && notes.length === 0"
-          @pointer-move="movePointer"
-          @pointer-leave="clearPointer"
-          @scroll="updateCursorPosition"
-        >
-          <BoardNote
-            v-for="note in notes"
-            :key="note.id"
-            :note="note"
-            :position="notePosition(note)"
-            :disabled="status !== 'ready'"
-            :dragging="drag?.id === note.id"
-            :remote-dragging="
-              drag?.id !== note.id && !pendingPosition(note.id) && notePreviews.has(note.id)
-            "
-            @drag-start="startDrag($event, note)"
-            @drag-move="updateDrag"
-            @drag-end="finishDrag"
-            @move-with-key="moveWithKey($event, note)"
-            @edit="openEditor($event, note)"
-          />
-        </BoardCanvas>
-        <div class="flex items-center justify-between gap-3">
-          <p class="text-sm text-muted">Select a note to edit it, or drag its handle to move it.</p>
-          <UButton
-            v-if="displayName"
-            color="neutral"
-            variant="link"
-            class="max-w-[40%]"
-            :label="displayName"
-            :aria-label="'Change display name. Current name: ' + displayName"
-            @click="editName"
-          />
-        </div>
-      </main>
-
-      <main v-else class="grid flex-1 place-items-center bg-muted p-4 sm:p-6">
-        <UCard
-          :as="{ title: 'h1' }"
-          title="A shared canvas for ideas."
-          description="Capture ideas on sticky notes, then share a link to arrange them together in real time."
-          class="w-full max-w-md"
-        >
-          <template v-if="requestedBoard !== null" #default>
-            <UAlert
-              color="error"
-              variant="subtle"
-              icon="i-lucide-circle-alert"
-              description="This board link is invalid."
-              role="alert"
-            />
-          </template>
-          <template #footer>
-            <UButton block icon="i-lucide-plus" label="Create a board" @click="createBoard" />
-          </template>
-        </UCard>
-      </main>
-
-      <div
-        v-if="feedback"
-        class="pointer-events-none fixed inset-x-4 bottom-4 z-10 flex justify-center"
-      >
-        <UAlert
-          color="error"
-          variant="subtle"
-          icon="i-lucide-circle-alert"
-          :description="
-            feedback.kind === 'sync-error' ? 'Couldn’t refresh the board.' : feedback.message
-          "
-          :close="{ 'aria-label': 'Dismiss notification' }"
-          role="alert"
-          class="pointer-events-auto w-fit max-w-full items-center shadow-sm"
-          @update:open="feedback = undefined"
+        <UButton
+          icon="i-lucide-plus"
+          label="Add note"
+          :disabled="status !== 'ready'"
+          @click="openEditor"
         />
       </div>
 
-      <UModal
-        v-model:open="editorOpen"
-        :title="editing ? 'Edit note' : 'New note'"
-        :close="!pendingSave"
-        :dismissible="!pendingSave"
-        :content="modalContent"
+      <BoardCanvas
+        ref="canvas"
+        :cursors="cursors"
+        :show-empty="status === 'ready' && notes.length === 0"
+        @pointer-move="movePointer"
+        @pointer-leave="clearPointer"
+        @scroll="updateCursorPosition"
       >
-        <template #body="{ close }">
-          <form v-if="draft" class="grid gap-5" @submit.prevent="saveNote">
-            <UFormField label="Text">
-              <UTextarea
-                v-model="draft.text"
-                :maxlength="MAX_TEXT"
-                :disabled="!!pendingSave"
-                autofocus
-                required
-                class="w-full"
-              />
-            </UFormField>
-            <URadioGroup
-              v-model="draft.color"
-              legend="Color"
-              :items="colorOptions"
-              :disabled="!!pendingSave"
-            >
-              <template #label="{ item }">
-                <span class="inline-flex items-center gap-2">
-                  {{ item.label }}
-                  <span
-                    class="size-2.5 rounded-full"
-                    :style="{ backgroundColor: item.background }"
-                    aria-hidden="true"
-                  ></span>
-                </span>
-              </template>
-            </URadioGroup>
-            <p v-if="status !== 'ready'" class="text-sm text-error" role="status">
-              You can save once the board reconnects.
-            </p>
-            <p v-if="saveError" class="text-sm text-error" role="alert">{{ saveError }}</p>
-            <div class="flex flex-wrap justify-end gap-2">
-              <UButton
-                v-if="editing"
-                color="error"
-                label="Delete"
-                class="mr-auto"
-                :disabled="status !== 'ready' || !!pendingSave"
-                @click="removeNote"
-              />
-              <UButton
-                color="neutral"
-                variant="outline"
-                label="Cancel"
-                :disabled="!!pendingSave"
-                @click="close"
-              />
-              <UButton
-                :label="pendingSave ? 'Saving…' : 'Save'"
-                type="submit"
-                :disabled="status !== 'ready' || !!pendingSave || !draft.text.trim()"
-              />
-            </div>
-          </form>
-        </template>
-      </UModal>
+        <BoardNote
+          v-for="note in notes"
+          :key="note.id"
+          :note="note"
+          :position="notePosition(note)"
+          :disabled="status !== 'ready'"
+          :dragging="drag?.id === note.id"
+          :remote-dragging="
+            drag?.id !== note.id && !pendingPosition(note.id) && notePreviews.has(note.id)
+          "
+          @drag-start="startDrag($event, note)"
+          @drag-move="updateDrag"
+          @drag-end="finishDrag"
+          @move-with-key="moveWithKey($event, note)"
+          @edit="openEditor($event, note)"
+        />
+      </BoardCanvas>
+      <div class="flex items-center justify-between gap-3">
+        <p class="text-sm text-muted">Select a note to edit it, or drag its handle to move it.</p>
+        <UButton
+          v-if="displayName"
+          color="neutral"
+          variant="link"
+          class="max-w-[40%]"
+          :label="displayName"
+          :aria-label="'Change display name. Current name: ' + displayName"
+          @click="editName"
+        />
+      </div>
+    </main>
 
-      <UModal
-        v-model:open="nameDialogOpen"
-        :title="choosingInitialName ? 'Join board' : 'Change display name'"
+    <div
+      v-if="feedback"
+      class="pointer-events-none fixed inset-x-4 bottom-4 z-10 flex justify-center"
+    >
+      <UAlert
+        color="error"
+        variant="subtle"
+        icon="i-lucide-circle-alert"
         :description="
-          choosingInitialName
-            ? 'Others on this board will see this name next to your cursor. You can also continue as Guest.'
-            : 'Others on this board will see this name next to your cursor.'
+          feedback.kind === 'sync-error' ? 'Couldn’t refresh the board.' : feedback.message
         "
-        :close="!choosingInitialName"
-        :dismissible="!choosingInitialName"
-        :content="modalContent"
-      >
-        <template #body="{ close }">
-          <form class="grid gap-5" @submit.prevent="saveName(nameDraft)">
-            <UFormField label="Display name">
-              <UInput
-                v-model="nameDraft"
-                :maxlength="MAX_NAME"
-                :required="!choosingInitialName"
-                autofocus
-                class="w-full"
-              />
-            </UFormField>
-            <div class="flex flex-wrap justify-end gap-2">
-              <UButton
-                v-if="choosingInitialName"
-                color="neutral"
-                variant="outline"
-                label="Continue as Guest"
-                @click="saveName('Guest')"
-              />
-              <UButton v-else color="neutral" variant="outline" label="Cancel" @click="close" />
-              <UButton
-                :label="choosingInitialName ? 'Join' : 'Save'"
-                type="submit"
-                :disabled="!choosingInitialName && !nameDraft.trim()"
-              />
-            </div>
-          </form>
-        </template>
-      </UModal>
+        close
+        role="alert"
+        class="pointer-events-auto w-fit max-w-full items-center shadow-sm"
+        @update:open="feedback = undefined"
+      />
     </div>
-  </UApp>
+
+    <BoardNoteDialog
+      v-model:open="editorOpen"
+      v-model:draft="draft"
+      :connected="status === 'ready'"
+      :editing="editing"
+      :saving="!!pendingSave"
+      :save-error="saveError"
+      @save="saveNote"
+      @remove="removeNote"
+      @close-auto-focus="restoreDialogFocus"
+    />
+
+    <BoardNameDialog
+      v-model:open="nameDialogOpen"
+      v-model:draft="nameDraft"
+      :initial="choosingInitialName"
+      @save="saveName"
+      @close-auto-focus="restoreDialogFocus"
+    />
+  </AppShell>
 </template>

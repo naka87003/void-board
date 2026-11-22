@@ -1,13 +1,13 @@
 import { fileURLToPath } from "node:url";
 import ui from "@nuxt/ui/vite";
-import vue from "@vitejs/plugin-vue";
+import { voidVue } from "@void/vue/plugin";
 import { defineConfig } from "vite";
 import { voidPlugin } from "void";
 
 export default defineConfig({
   plugins: [
     voidPlugin(),
-    vue(),
+    voidVue(),
     ui({
       router: false,
       colorMode: false,
