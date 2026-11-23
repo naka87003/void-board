@@ -8,7 +8,7 @@ getCurrentInstance()?.appContext.app.use(ui);
 </script>
 
 <template>
-  <UApp :toaster="null">
+  <UApp>
     <slot />
   </UApp>
 </template>
