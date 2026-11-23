@@ -10,11 +10,17 @@ import voidLogo from "@/assets/void-logo.svg";
         class="mx-auto flex h-16 max-w-screen-2xl items-center justify-between gap-2 px-4 sm:px-6"
       >
         <Link
-          class="inline-flex shrink-0 items-center rounded-sm"
+          class="inline-flex min-w-0 items-center rounded-sm"
           href="/"
           aria-label="Void Board home"
         >
-          <img :src="voidLogo" class="h-4 w-auto" width="270" height="58" alt="" />
+          <img
+            :src="voidLogo"
+            class="h-4 w-auto object-contain object-left"
+            width="183"
+            height="16"
+            alt=""
+          />
         </Link>
         <slot name="header-actions" />
       </div>
