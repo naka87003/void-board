@@ -90,6 +90,7 @@ function updateTextStyle(style: Partial<TextStyle>) {
           v-if="draft.kind === 'note'"
           :model-value="draft.color"
           @update:model-value="updateColor"
+          variant="table"
           legend="Color"
           :items="colorOptions"
           :disabled="busy"
@@ -101,33 +102,39 @@ function updateTextStyle(style: Partial<TextStyle>) {
                 class="size-2.5 rounded-full"
                 :style="{ backgroundColor: item.background }"
                 aria-hidden="true"
-              ></span>
+              >
+              </span>
             </span>
           </template>
         </URadioGroup>
         <div v-else class="grid gap-4">
           <URadioGroup
             legend="Size"
-            orientation="horizontal"
+            variant="table"
             :items="sizeOptions"
             :model-value="draft.style.size"
             :disabled="busy"
             @update:model-value="updateTextStyle({ size: $event })"
           />
-          <div class="flex flex-wrap gap-x-5 gap-y-2">
-            <UCheckbox
-              label="Bold"
-              :model-value="draft.style.bold"
-              :disabled="busy"
-              @update:model-value="updateTextStyle({ bold: $event === true })"
-            />
-            <UCheckbox
-              label="Underline"
-              :model-value="draft.style.underline"
-              :disabled="busy"
-              @update:model-value="updateTextStyle({ underline: $event === true })"
-            />
-          </div>
+          <fieldset class="min-w-0">
+            <legend class="mb-1 text-sm font-medium text-default">Formatting</legend>
+            <div class="flex flex-wrap gap-x-5 gap-y-2">
+              <UCheckbox
+                label="Bold"
+                variant="card"
+                :model-value="draft.style.bold"
+                :disabled="busy"
+                @update:model-value="updateTextStyle({ bold: $event === true })"
+              />
+              <UCheckbox
+                label="Underline"
+                variant="card"
+                :model-value="draft.style.underline"
+                :disabled="busy"
+                @update:model-value="updateTextStyle({ underline: $event === true })"
+              />
+            </div>
+          </fieldset>
         </div>
         <p v-if="!connected" class="text-sm text-error" role="status">
           You can make changes once the board reconnects.
