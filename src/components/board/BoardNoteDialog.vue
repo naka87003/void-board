@@ -46,11 +46,17 @@ function updateColor(color: Note["color"]) {
   >
     <template #body="{ close }">
       <form v-if="draft" class="grid gap-5" @submit.prevent="emit('save')">
-        <UFormField label="Text">
+        <UFormField
+          label="Text"
+          :help="`${draft.text.length} / ${MAX_TEXT}`"
+          :ui="{ help: 'text-end tabular-nums' }"
+        >
           <UTextarea
             :model-value="draft.text"
             @update:model-value="updateText"
             :maxlength="MAX_TEXT"
+            autoresize
+            :maxrows="8"
             :disabled="saving"
             autofocus
             required

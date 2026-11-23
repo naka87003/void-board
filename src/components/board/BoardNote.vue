@@ -53,7 +53,7 @@ const emit = defineEmits<{
       title="Edit note"
       @click="emit('edit', $event)"
     >
-      {{ note.text }}
+      <span class="note-text">{{ note.text }}</span>
     </button>
   </article>
 </template>
@@ -106,9 +106,16 @@ const emit = defineEmits<{
   flex: 1;
   align-items: flex-start;
   min-height: 0;
-  overflow: auto;
+  overflow: clip;
   text-align: start;
-  padding: 8px 15px 15px;
+  padding: 8px 15px 6px;
+}
+.note-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
+  overflow: hidden;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   line-height: 1.55;
