@@ -52,7 +52,7 @@ const feedback = ref<{ kind: "sync-error" } | { kind: "error"; message: string }
 let dialogOpener: HTMLElement | undefined;
 let pointerPosition: { clientX: number; clientY: number } | undefined;
 
-const connection = useBoardConnection(boardId, () => displayName.value, {
+const connection = useBoardConnection(boardId, displayName, {
   onSnapshot() {
     if (feedback.value?.kind === "sync-error") feedback.value = undefined;
     updateCursorPosition();

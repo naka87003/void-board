@@ -1,5 +1,5 @@
 import { connect } from "void/ws";
-import { onMounted, onUnmounted, ref, shallowReactive } from "vue";
+import { onMounted, onUnmounted, ref, shallowReactive, toValue, type MaybeRefOrGetter } from "vue";
 import {
   DEFAULT_BOARD_TITLE,
   type BoardItem,
@@ -18,7 +18,7 @@ const syncTimeout = 5_000;
 
 export function useBoardConnection(
   board: string | null,
-  displayName: () => string,
+  displayName: MaybeRefOrGetter<string>,
   callbacks: {
     onSnapshot: () => void;
     onDisconnect: () => void;
@@ -37,7 +37,7 @@ export function useBoardConnection(
   const presence = useBoardPresence(sendMessage, displayName);
 
   function connectBoard() {
-    if (!board || !displayName() || socket) return;
+    if (!board || !toValue(displayName) || socket) return;
 
     socket = connect("/boards/[board]", { params: { board } });
     socket.on("message", (message) => {

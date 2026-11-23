@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { ref } from "vue";
 import { useBoardPresence } from "./board-presence";
 
 const peer = "00000000-0000-4000-8000-000000000001";
@@ -10,22 +11,24 @@ afterEach(() => {
 });
 
 describe("board presence", () => {
-  it("batches outgoing cursor and drag updates using their latest positions", () => {
+  it("batches outgoing cursor and drag updates using the latest positions and name", () => {
     vi.useFakeTimers();
     const send = vi.fn(() => true);
-    const presence = useBoardPresence(send, () => "Guest");
+    const name = ref("Guest");
+    const presence = useBoardPresence(send, name);
     const latest = { x: 30, y: 40 };
 
     presence.setCursor({ x: 10, y: 20 });
     presence.setDrag({ id, x: 10, y: 20 });
     presence.setCursor(latest);
     presence.setDrag({ id, ...latest });
+    name.value = "Alice";
 
     expect(send).not.toHaveBeenCalled();
     vi.runOnlyPendingTimers();
 
     expect(send.mock.calls).toEqual([
-      [{ type: "presence.cursor", name: "Guest", cursor: latest }],
+      [{ type: "presence.cursor", name: "Alice", cursor: latest }],
       [{ type: "presence.drag", id, ...latest }],
     ]);
   });
@@ -33,7 +36,7 @@ describe("board presence", () => {
   it("discards a queued drag preview after the drag ends", () => {
     vi.useFakeTimers();
     const send = vi.fn(() => true);
-    const presence = useBoardPresence(send, () => "Guest");
+    const presence = useBoardPresence(send, "Guest");
 
     presence.setDrag({ id, x: 10, y: 20 });
     presence.endDrag();

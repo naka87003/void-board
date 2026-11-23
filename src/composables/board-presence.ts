@@ -1,4 +1,4 @@
-import { computed, reactive } from "vue";
+import { computed, reactive, toValue, type MaybeRefOrGetter } from "vue";
 import type { ClientMessage, Cursor, ServerMessage } from "../../shared/board";
 
 type CursorMessage = Extract<ServerMessage, { type: "presence.cursor" }>;
@@ -11,7 +11,10 @@ export function peerColor(peer: string) {
   return cursorColors[parseInt(peer.slice(0, 8), 16) % cursorColors.length];
 }
 
-export function useBoardPresence(send: (message: ClientMessage) => boolean, name: () => string) {
+export function useBoardPresence(
+  send: (message: ClientMessage) => boolean,
+  name: MaybeRefOrGetter<string>,
+) {
   const cursors = reactive(new Map<string, Omit<CursorMessage, "cursor"> & { cursor: Cursor }>());
   const drags = reactive(new Map<string, DragMessage>());
   const itemPreviews = computed(
@@ -27,7 +30,7 @@ export function useBoardPresence(send: (message: ClientMessage) => boolean, name
   function flush() {
     clearTimeout(timer);
     timer = undefined;
-    if (cursorChanged) send({ type: "presence.cursor", cursor, name: name() });
+    if (cursorChanged) send({ type: "presence.cursor", cursor, name: toValue(name) });
     if (dragChanged && drag) send({ type: "presence.drag", ...drag });
     cursorChanged = false;
     dragChanged = false;
@@ -46,7 +49,7 @@ export function useBoardPresence(send: (message: ClientMessage) => boolean, name
   }
 
   function updateName() {
-    if (cursor) send({ type: "presence.cursor", cursor, name: name() });
+    if (cursor) send({ type: "presence.cursor", cursor, name: toValue(name) });
   }
 
   function setDrag(position: Omit<DragMessage, "peer" | "type">) {
