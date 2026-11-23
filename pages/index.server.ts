@@ -1,17 +1,12 @@
-import { defineHandler, type InferProps } from "void/handler";
+import { defineHandler } from "void/handler";
 import { routeUrl } from "void/routes";
-import { idPattern } from "../shared/board";
+import { getRoom } from "void/ws/server";
+import { boardTitleForm } from "../shared/board";
 
-export type Props = InferProps<typeof loader>;
-
-export const loader = defineHandler((c) => {
-  const url = new URL(c.req.url);
-  const board = url.searchParams.get("board");
-  if (board && idPattern.test(board)) {
-    url.pathname = routeUrl("/boards/[board]", { params: { board } });
-    url.searchParams.delete("board");
-    return c.redirect(url);
+export const action = defineHandler.withValidator({ body: boardTitleForm })(async (c, { body }) => {
+  const board = crypto.randomUUID();
+  if (body.title) {
+    await getRoom("/boards/[board]", { params: { board } }).actions.setTitle(body.title);
   }
-
-  return { error: board === null ? undefined : "This board link is invalid." };
+  return c.redirect(routeUrl("/boards/[board]", { params: { board } }), 303);
 });

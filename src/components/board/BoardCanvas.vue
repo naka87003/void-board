@@ -11,6 +11,7 @@ defineProps<{
 const emit = defineEmits<{
   pointerMove: [event: PointerEvent];
   pointerLeave: [event: PointerEvent];
+  canvasClick: [];
   scroll: [];
 }>();
 
@@ -30,7 +31,7 @@ defineExpose({ viewport });
       @pointerleave="emit('pointerLeave', $event)"
       @scroll.passive="emit('scroll')"
     >
-      <div class="canvas" :style="canvasStyle">
+      <div class="canvas" :style="canvasStyle" @click.self="emit('canvasClick')">
         <slot />
         <div
           v-for="[peer, { cursor, name }] in cursors"
@@ -47,7 +48,7 @@ defineExpose({ viewport });
       v-if="showEmpty"
       class="pointer-events-none absolute inset-0 grid place-content-center px-4 text-center text-sm text-muted"
     >
-      <p>Add your first sticky note</p>
+      <p>Add a sticky note or text to get started</p>
     </div>
   </div>
 </template>
@@ -63,6 +64,7 @@ defineExpose({ viewport });
 }
 .canvas {
   position: relative;
+  isolation: isolate;
   overflow: clip;
   background-image: radial-gradient(rgb(255 255 255 / 10%) 1px, transparent 1px);
   background-size: 20px 20px;

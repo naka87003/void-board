@@ -1,10 +1,49 @@
-import { defineRoom } from "void/ws";
-import { clientMessage, idPattern, MAX_NOTES, serverMessage, type Note } from "../../shared/board";
+import { defineRoom, type RoomController } from "void/ws";
+import {
+  clientMessage,
+  DEFAULT_BOARD_TITLE,
+  idPattern,
+  MAX_ITEMS,
+  sameItemContent,
+  serverMessage,
+  type BoardItem,
+  type ServerMessage,
+} from "../../shared/board";
 
-const notePrefix = "note:";
+const itemPrefix = "item:";
+const titleKey = "title";
+
+async function readBoard(storage: DurableObjectStorage) {
+  const [title, items] = await Promise.all([
+    storage.get<string>(titleKey),
+    storage.list<BoardItem>({ prefix: itemPrefix }),
+  ]);
+  return { title: title ?? DEFAULT_BOARD_TITLE, items: [...items.values()] };
+}
+
+async function notifyPeers(
+  room: Pick<RoomController, "getConnections">,
+  message: ServerMessage,
+  excludedPeer?: string,
+) {
+  // A closing socket must not interrupt notifications to the rest of the room.
+  await Promise.allSettled(
+    Array.from(room.getConnections(), async (connection) => {
+      if (connection.id !== excludedPeer) await connection.send(message);
+    }),
+  );
+}
 
 export default defineRoom({
   messages: { client: clientMessage, server: serverMessage },
+
+  actions: {
+    async setTitle(ctx, name: string) {
+      const title = name || DEFAULT_BOARD_TITLE;
+      await ctx.storage.put(titleKey, title);
+      await notifyPeers(ctx.room, { type: "board.title", title });
+    },
+  },
 
   onBeforeConnect(ctx) {
     if (!idPattern.test(ctx.params.board)) {
@@ -13,8 +52,8 @@ export default defineRoom({
   },
 
   async onConnect(ctx) {
-    const notes = await ctx.storage.list<Note>({ prefix: notePrefix });
-    await ctx.connection.send({ type: "board.snapshot", notes: [...notes.values()] });
+    const board = await readBoard(ctx.storage);
+    await ctx.connection.send({ type: "board.snapshot", ...board });
     await ctx.room.broadcast({ type: "presence.request" }, [ctx.connection.id]);
   },
 
@@ -28,9 +67,9 @@ export default defineRoom({
     const peer = ctx.connection.id;
     switch (event.type) {
       case "board.sync": {
-        let notes;
+        let board;
         try {
-          notes = await ctx.storage.list<Note>({ prefix: notePrefix });
+          board = await readBoard(ctx.storage);
         } catch (error) {
           console.error("Unable to read board", error);
           await ctx.connection.send({
@@ -42,7 +81,7 @@ export default defineRoom({
         }
         await ctx.connection.send({
           type: "board.snapshot",
-          notes: [...notes.values()],
+          ...board,
           requestId: event.requestId,
         });
         return;
@@ -54,41 +93,50 @@ export default defineRoom({
         return;
     }
 
-    const id = event.type === "note.add" ? event.note.id : event.id;
-    const key = notePrefix + id;
-    const requestId = "requestId" in event ? event.requestId : undefined;
+    const id = event.type === "item.add" ? event.item.id : event.id;
+    const key = itemPrefix + id;
+    const requestId = event.requestId;
 
     let result;
     try {
-      // Keep the capacity check and each note change atomic across live connections.
+      // Keep the capacity check and each item change atomic across live connections.
       result = await ctx.storage.transaction(async (txn) => {
-        const existing = await txn.get<Note>(key);
+        if (event.type === "item.remove") {
+          await txn.delete(key);
+          return { type: "item.removed", id } as const;
+        }
 
-        if (event.type === "note.add") {
-          if (existing) return { type: "note.updated", note: existing } as const;
-          const notes = await txn.list({ prefix: notePrefix, limit: MAX_NOTES });
-          if (notes.size >= MAX_NOTES) return { type: "board.error", reason: "full" } as const;
+        const existing = await txn.get<BoardItem>(key);
 
-          await txn.put(key, event.note);
-          return { type: "note.updated", note: event.note } as const;
+        if (event.type === "item.add") {
+          if (existing) return { type: "item.updated", item: existing } as const;
+          const items = await txn.list({ prefix: itemPrefix, limit: MAX_ITEMS });
+          if (items.size >= MAX_ITEMS) return { type: "board.error", reason: "full" } as const;
+
+          await txn.put(key, event.item);
+          return { type: "item.updated", item: event.item } as const;
         }
 
         if (!existing) return { type: "board.error", reason: "missing" } as const;
 
-        if (event.type === "note.remove") {
-          await txn.delete(key);
-          return { type: "note.removed", id } as const;
+        if (event.type === "item.move") {
+          const item = { ...existing, x: event.x, y: event.y };
+          await txn.put(key, item);
+          return { type: "item.updated", item, movedBy: peer } as const;
         }
 
-        const note =
-          event.type === "note.move"
-            ? { ...existing, x: event.x, y: event.y }
-            : { ...existing, text: event.text, color: event.color };
-
-        await txn.put(key, note);
-        return event.type === "note.move"
-          ? ({ type: "note.updated", note, movedBy: peer } as const)
-          : ({ type: "note.updated", note } as const);
+        if (event.content.kind !== existing.kind) {
+          return { type: "board.error", reason: "kind" } as const;
+        }
+        if (sameItemContent(existing, event.content)) {
+          return { type: "item.updated", item: existing } as const;
+        }
+        if (event.baseContent && !sameItemContent(existing, event.baseContent)) {
+          return { type: "board.error", reason: "conflict" } as const;
+        }
+        const item = { ...event.content, id, x: existing.x, y: existing.y };
+        await txn.put(key, item);
+        return { type: "item.updated", item } as const;
       });
     } catch (error) {
       console.error("Unable to update board", error);
@@ -96,17 +144,17 @@ export default defineRoom({
     }
 
     if (result.type === "board.error") {
-      if (event.type === "note.move") {
-        await ctx.room.broadcast({ type: "presence.drag-cancelled", peer }, [peer]);
+      if (event.type === "item.move") {
+        await notifyPeers(ctx.room, { type: "presence.drag-cancelled", peer }, peer);
       }
       await ctx.connection.send({ ...result, requestId });
-    } else if (result.type === "note.updated" && requestId) {
-      await Promise.all([
-        ctx.room.broadcast(result, [peer]),
+    } else if (requestId) {
+      await Promise.allSettled([
+        notifyPeers(ctx.room, result, peer),
         ctx.connection.send({ ...result, requestId }),
       ]);
     } else {
-      await ctx.room.broadcast(result);
+      await notifyPeers(ctx.room, result);
     }
   },
 });

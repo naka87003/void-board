@@ -2,16 +2,22 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   BOARD_HEIGHT,
   BOARD_WIDTH,
+  boardTitleForm,
   clientMessage,
+  DEFAULT_BOARD_TITLE,
+  MAX_BOARD_TITLE,
   MAX_NAME,
   MAX_TEXT,
   NOTE_HEIGHT,
   NOTE_WIDTH,
+  sameItemContent,
   serverMessage,
+  type BoardItem,
   type Note,
 } from "./board";
 
 const note = {
+  kind: "note",
   id: "00000000-0000-4000-8000-000000000001",
   text: "An idea",
   color: "yellow",
@@ -19,10 +25,24 @@ const note = {
   y: BOARD_HEIGHT - NOTE_HEIGHT,
 } satisfies Note;
 const requestId = "00000000-0000-4000-8000-000000000002";
+const textItem = {
+  kind: "text",
+  id: "00000000-0000-4000-8000-000000000003",
+  text: "Next steps",
+  style: { size: 24, bold: true, underline: true },
+  x: note.x,
+  y: note.y,
+} satisfies BoardItem;
+
+it("accepts a blank or trimmed board name and rejects names over the limit", () => {
+  expect(boardTitleForm.parse({ title: "  " })).toEqual({ title: "" });
+  expect(boardTitleForm.parse({ title: "  Planning  " })).toEqual({ title: "Planning" });
+  expect(boardTitleForm.safeParse({ title: "a".repeat(MAX_BOARD_TITLE + 1) }).success).toBe(false);
+});
 
 describe("client messages", () => {
   it("accepts a note at the edge of the board with an optional request ID", () => {
-    const message = { type: "note.add", note };
+    const message = { type: "item.add", item: note };
 
     expect(clientMessage.parse(message)).toEqual(message);
     expect(clientMessage.parse({ ...message, requestId })).toEqual({ ...message, requestId });
@@ -30,6 +50,7 @@ describe("client messages", () => {
 
   it.each([
     { id: "invalid-id" },
+    { kind: undefined },
     { color: "blue" },
     { x: -1 },
     { x: 0.5 },
@@ -37,16 +58,49 @@ describe("client messages", () => {
     { y: BOARD_HEIGHT - NOTE_HEIGHT + 1 },
   ])("rejects a note with invalid fields %j", (fields) => {
     expect(
-      clientMessage.safeParse({ type: "note.add", note: { ...note, ...fields } }).success,
+      clientMessage.safeParse({ type: "item.add", item: { ...note, ...fields } }).success,
     ).toBe(false);
   });
 
   it("enforces the note text limit in UTF-16 code units", () => {
     const text = "😀".repeat(MAX_TEXT / 2);
-    const message = { type: "note.edit", id: note.id, color: note.color, text };
+    const content = { kind: note.kind, color: note.color, text };
+    const baseContent = { kind: note.kind, text: note.text, color: note.color };
+    const message = { type: "item.edit", id: note.id, content, baseContent, requestId };
 
     expect(clientMessage.parse(message)).toEqual(message);
-    expect(clientMessage.safeParse({ ...message, text: text + "a" }).success).toBe(false);
+    expect(
+      clientMessage.safeParse({ ...message, content: { ...content, text: text + "a" } }).success,
+    ).toBe(false);
+  });
+
+  it("preserves text formatting in add and edit messages", () => {
+    const add = { type: "item.add", item: textItem, requestId };
+    const content = {
+      kind: "text",
+      text: "Decisions",
+      style: { size: 14, bold: false, underline: true },
+    };
+    const baseContent = { kind: textItem.kind, text: textItem.text, style: textItem.style };
+    const edit = { type: "item.edit", id: textItem.id, content, baseContent, requestId };
+
+    expect(clientMessage.parse(add)).toEqual(add);
+    expect(clientMessage.parse(edit)).toEqual(edit);
+    const overwrite = { ...edit, baseContent: null };
+    expect(clientMessage.parse(overwrite)).toEqual(overwrite);
+    expect(clientMessage.safeParse({ ...edit, baseContent: undefined }).success).toBe(false);
+    expect(
+      clientMessage.safeParse({ ...add, item: { ...textItem, style: undefined } }).success,
+    ).toBe(false);
+    expect(
+      clientMessage.safeParse({ ...edit, content: { ...content, kind: undefined } }).success,
+    ).toBe(false);
+    expect(
+      clientMessage.safeParse({
+        ...edit,
+        content: { ...content, style: { ...content.style, size: 100 } },
+      }).success,
+    ).toBe(false);
   });
 
   it("trims display names and allows cursors at the board edge or absent", () => {
@@ -61,18 +115,32 @@ describe("client messages", () => {
   });
 });
 
+it("compares content independently of position and detects formatting changes", () => {
+  const moved = { ...textItem, x: 0, y: 0 };
+  expect(sameItemContent(textItem, moved)).toBe(true);
+  expect(sameItemContent(textItem, { ...moved, style: { ...moved.style, bold: false } })).toBe(
+    false,
+  );
+});
+
 describe("server messages", () => {
-  it("validates notes inside a board snapshot", () => {
-    const snapshot = { type: "board.snapshot", notes: [note] };
+  it("validates items inside a board snapshot", () => {
+    const snapshot = { type: "board.snapshot", title: DEFAULT_BOARD_TITLE, items: [note] };
 
     expect(serverMessage.parse(snapshot)).toEqual(snapshot);
     expect(
-      serverMessage.safeParse({ ...snapshot, notes: [{ ...note, id: "invalid" }] }).success,
+      serverMessage.safeParse({ ...snapshot, items: [{ ...note, id: "invalid" }] }).success,
     ).toBe(false);
   });
 
+  it("preserves both sticky notes and text in snapshots", () => {
+    const snapshot = { type: "board.snapshot", title: "Planning", items: [note, textItem] };
+
+    expect(serverMessage.parse(snapshot)).toEqual(snapshot);
+  });
+
   it("preserves the request ID on save acknowledgements and board errors", () => {
-    const acknowledgement = { type: "note.updated", note, requestId };
+    const acknowledgement = { type: "item.updated", item: note, requestId };
     const error = { type: "board.error", reason: "storage", requestId };
 
     expect(serverMessage.parse(acknowledgement)).toEqual(acknowledgement);

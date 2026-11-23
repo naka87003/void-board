@@ -52,17 +52,17 @@ describe("board presence", () => {
 
     presence.receive(first);
     presence.receive(latest);
-    expect(presence.notePreviews.value.get(id)).toEqual(latest);
+    expect(presence.itemPreviews.value.get(id)).toEqual(latest);
 
     presence.receive({
-      type: "note.updated",
-      note: { id, x: latest.x, y: latest.y, text: "An idea", color: "yellow" },
+      type: "item.updated",
+      item: { kind: "note", id, x: latest.x, y: latest.y, text: "An idea", color: "yellow" },
       movedBy: otherPeer,
     });
-    expect(presence.notePreviews.value.get(id)).toEqual(first);
+    expect(presence.itemPreviews.value.get(id)).toEqual(first);
 
-    presence.receive({ type: "note.removed", id });
-    expect(presence.notePreviews.value.has(id)).toBe(false);
+    presence.receive({ type: "item.removed", id });
+    expect(presence.itemPreviews.value.has(id)).toBe(false);
   });
 
   it("clears a departing peer's cursor and drag preview", () => {
@@ -81,11 +81,11 @@ describe("board presence", () => {
     presence.receive(cursor);
     presence.receive(drag);
     expect(presence.cursors.get(peer)).toEqual(cursor);
-    expect(presence.notePreviews.value.get(id)).toEqual(drag);
+    expect(presence.itemPreviews.value.get(id)).toEqual(drag);
 
     presence.receive({ type: "presence.left", peer });
 
     expect(presence.cursors.has(peer)).toBe(false);
-    expect(presence.notePreviews.value.has(id)).toBe(false);
+    expect(presence.itemPreviews.value.has(id)).toBe(false);
   });
 });

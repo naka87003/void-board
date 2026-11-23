@@ -1,10 +1,15 @@
 import { connect } from "void/ws";
 import { onMounted, onUnmounted, ref, shallowReactive } from "vue";
-import type { ClientMessage, Note, ServerMessage } from "../../shared/board";
+import {
+  DEFAULT_BOARD_TITLE,
+  type BoardItem,
+  type ClientMessage,
+  type ServerMessage,
+} from "../../shared/board";
 import { useBoardPresence } from "./board-presence";
 
 type BoardError = Extract<ServerMessage, { type: "board.error" }>["reason"];
-type Position = Pick<Note, "x" | "y">;
+type Position = Pick<BoardItem, "x" | "y">;
 type Timer = ReturnType<typeof setTimeout>;
 type PendingMove = { position: Position; requestId: string; saveTimer: Timer | undefined };
 
@@ -17,13 +22,15 @@ export function useBoardConnection(
   callbacks: {
     onSnapshot: () => void;
     onDisconnect: () => void;
-    onSave: (requestId: string, note: Note) => void;
+    onSave: (requestId: string, item: BoardItem) => void;
+    onRemove: (requestId: string) => void;
     onSyncError: () => void;
     onError: (reason: BoardError, requestId?: string) => void;
   },
 ) {
   const status = ref<"connecting" | "ready" | "disconnected">("connecting");
-  const notes = ref<Note[]>([]);
+  const title = ref(DEFAULT_BOARD_TITLE);
+  const items = ref<BoardItem[]>([]);
   const pendingMoves = shallowReactive(new Map<string, PendingMove>());
   let sync: { requestId: string; timer: Timer; moves: [string, PendingMove][] } | undefined;
   let socket: ReturnType<typeof connect<"/boards/[board]">> | undefined;
@@ -38,31 +45,36 @@ export function useBoardConnection(
       switch (message.type) {
         case "board.snapshot":
           if (message.requestId && message.requestId !== sync?.requestId) break;
-          notes.value = message.notes;
+          title.value = message.title;
+          items.value = message.items;
           status.value = "ready";
           if (message.requestId) finishSync();
           callbacks.onSnapshot();
           break;
-        case "note.updated": {
-          const index = notes.value.findIndex((note) => note.id === message.note.id);
+        case "board.title":
+          title.value = message.title;
+          break;
+        case "item.updated": {
+          const index = items.value.findIndex(({ id }) => id === message.item.id);
           if (index === -1) {
-            notes.value.push(message.note);
+            items.value.push(message.item);
           } else {
-            notes.value[index] = message.note;
+            items.value[index] = message.item;
           }
           if (message.movedBy) {
-            const pending = pendingMoves.get(message.note.id);
+            const pending = pendingMoves.get(message.item.id);
             if (pending && pending.requestId === message.requestId) {
-              clearMove(message.note.id);
+              clearMove(message.item.id);
             }
           } else if (message.requestId) {
-            callbacks.onSave(message.requestId, message.note);
+            callbacks.onSave(message.requestId, message.item);
           }
           break;
         }
-        case "note.removed":
+        case "item.removed":
           clearMove(message.id);
-          notes.value = notes.value.filter((note) => note.id !== message.id);
+          items.value = items.value.filter(({ id }) => id !== message.id);
+          if (message.requestId) callbacks.onRemove(message.requestId);
           break;
         case "board.error": {
           if (sync && message.requestId === sync.requestId) {
@@ -140,9 +152,9 @@ export function useBoardConnection(
     callbacks.onSyncError();
   }
 
-  function moveNote(id: string, { x, y }: Position) {
+  function moveItem(id: string, { x, y }: Position) {
     const requestId = crypto.randomUUID();
-    if (!sendMessage({ type: "note.move", id, x, y, requestId })) return false;
+    if (!sendMessage({ type: "item.move", id, x, y, requestId })) return false;
 
     clearMove(id);
     const saveTimer = setTimeout(() => {
@@ -164,11 +176,12 @@ export function useBoardConnection(
 
   return {
     status,
-    notes,
+    title,
+    items,
     presence,
     connectBoard,
     sendMessage,
-    moveNote,
+    moveItem,
     pendingPosition,
   };
 }

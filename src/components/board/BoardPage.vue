@@ -3,27 +3,33 @@ import UAlert from "@nuxt/ui/components/Alert.vue";
 import UBadge from "@nuxt/ui/components/Badge.vue";
 import UButton from "@nuxt/ui/components/Button.vue";
 import { useEventListener, useSessionStorage, useTimeoutFn } from "@vueuse/core";
-import { computed, ref, useTemplateRef, watch } from "vue";
+import { computed, ref, shallowRef, useTemplateRef } from "vue";
 import { routeUrl } from "void/routes";
 import {
   BOARD_HEIGHT,
   BOARD_WIDTH,
+  DEFAULT_TEXT_STYLE,
   MAX_NAME,
-  MAX_NOTES,
-  NOTE_HEIGHT,
-  NOTE_WIDTH,
+  MAX_ITEMS,
+  sameItemContent,
   type ClientMessage,
-  type Note,
+  type BoardItem,
+  type ItemContent,
 } from "../../../shared/board";
 import AppShell from "@/components/AppShell.vue";
 import BoardCanvas from "./BoardCanvas.vue";
+import BoardItemDialog from "./BoardItemDialog.vue";
+import BoardItemView from "./BoardItemView.vue";
 import BoardNameDialog from "./BoardNameDialog.vue";
-import BoardNote from "./BoardNote.vue";
-import BoardNoteDialog from "./BoardNoteDialog.vue";
 import BoardShareDialog from "./BoardShareDialog.vue";
+import BoardTitleDialog from "./BoardTitleDialog.vue";
 import { useBoardConnection } from "@/composables/board-connection";
+import { boundedPosition, useBoardItemInteractions } from "@/composables/board-item-interactions";
 
 const { boardId } = defineProps<{ boardId: string }>();
+type ItemChange = Extract<ClientMessage, { type: "item.add" | "item.edit" | "item.remove" }> & {
+  requestId: string;
+};
 const canvas = useTemplateRef("canvas");
 const viewport = computed(() => canvas.value?.viewport);
 const editorOpen = ref(false);
@@ -31,72 +37,96 @@ const storedName = useSessionStorage("void-board.displayName", "", {
   writeDefaults: false,
   flush: "sync",
 });
-const legacyName = sessionStorage.getItem("yohaku.displayName")?.trim().slice(0, MAX_NAME) ?? "";
-const displayName = computed(() => storedName.value.trim().slice(0, MAX_NAME) || legacyName);
+const displayName = computed(() => storedName.value.trim().slice(0, MAX_NAME));
 const choosingInitialName = ref(!displayName.value);
 const nameDialogOpen = ref(choosingInitialName.value);
 const nameDraft = ref("");
-const draft = ref<Note>();
-const editing = ref(false);
-const pendingSave = ref<string>();
-const saveError = ref("");
-const saveTimeout = useTimeoutFn(interruptSave, 10_000, { immediate: false });
+const draft = ref<BoardItem>();
+const originalContent = shallowRef<ItemContent>();
+const editConflict = ref(false);
+const editing = computed(() => Boolean(originalContent.value) || editConflict.value);
+const pendingChange = shallowRef<{ kind: "save" | "delete"; requestId: string }>();
+const itemError = ref("");
+const changeTimeout = useTimeoutFn(interruptItemChange, 10_000, { immediate: false });
 const feedback = ref<{ kind: "sync-error" } | { kind: "error"; message: string }>();
-const drag = ref<{
-  id: string;
-  pointer: number;
-  offsetX: number;
-  offsetY: number;
-  start: Pick<Note, "x" | "y">;
-  x: number;
-  y: number;
-}>();
 let dialogOpener: HTMLElement | undefined;
 let pointerPosition: { clientX: number; clientY: number } | undefined;
 
-const { status, notes, pendingPosition, presence, connectBoard, sendMessage, moveNote } =
-  useBoardConnection(boardId, () => displayName.value, {
-    onSnapshot() {
-      if (feedback.value?.kind === "sync-error") feedback.value = undefined;
-      updateCursorPosition();
-    },
-    onDisconnect() {
-      drag.value = undefined;
-      interruptSave();
-    },
-    onSyncError() {
-      feedback.value = { kind: "sync-error" };
-    },
-    onSave(requestId, note) {
-      if (requestId !== pendingSave.value) return;
-      finishSave();
-      if (note.text !== draft.value?.text.trim() || note.color !== draft.value.color) {
-        editing.value = true;
-        saveError.value =
-          "This note already exists with different content. Review your draft and save again.";
-        return;
+const connection = useBoardConnection(boardId, () => displayName.value, {
+  onSnapshot() {
+    if (feedback.value?.kind === "sync-error") feedback.value = undefined;
+    updateCursorPosition();
+  },
+  onDisconnect() {
+    resetDrag();
+    interruptItemChange();
+  },
+  onSyncError() {
+    feedback.value = { kind: "sync-error" };
+  },
+  onSave(requestId, item) {
+    if (pendingChange.value?.kind !== "save" || requestId !== pendingChange.value.requestId) return;
+    finishItemChange();
+    const current = draft.value;
+    if (current && !sameItemContent(item, { ...current, text: current.text.trim() })) {
+      editConflict.value = true;
+      return;
+    }
+    editorOpen.value = false;
+  },
+  onRemove(requestId) {
+    if (pendingChange.value?.kind !== "delete" || requestId !== pendingChange.value.requestId)
+      return;
+    finishItemChange();
+    editorOpen.value = false;
+  },
+  onError(reason, requestId) {
+    const pending = pendingChange.value;
+    if (reason === "conflict") {
+      if (pending?.kind === "save" && requestId === pending.requestId) {
+        finishItemChange();
+        editConflict.value = true;
       }
-      editorOpen.value = false;
-    },
-    onError(reason, requestId) {
-      const message = {
-        full: "This board has reached its note limit.",
-        missing: "This note has already been deleted.",
-        storage: "Couldn’t save your changes. Please try again.",
-      }[reason];
-      if (!requestId) {
-        feedback.value = { kind: "error", message };
-      } else if (requestId === pendingSave.value) {
-        finishSave();
-        saveError.value = message;
-      }
-    },
-  });
-const { cursors, notePreviews } = presence;
-
-watch(notes, (currentNotes) => {
-  const active = drag.value;
-  if (active && !currentNotes.some((note) => note.id === active.id)) cancelDrag();
+      return;
+    }
+    const message = {
+      full: "This board has reached its item limit.",
+      missing: "This item has already been deleted.",
+      kind: "This item’s type does not match your draft.",
+      storage: "Couldn’t save your changes. Please try again.",
+    }[reason];
+    if (!requestId) {
+      feedback.value = { kind: "error", message };
+    } else if (requestId === pending?.requestId) {
+      finishItemChange();
+      itemError.value =
+        pending.kind === "delete" && reason === "storage"
+          ? "Couldn’t delete the item. Please try again."
+          : message;
+    }
+  },
+});
+const { status, title, items, presence, connectBoard, sendMessage } = connection;
+const { cursors } = presence;
+const {
+  selectedItemId,
+  clearSelection,
+  selectItem,
+  editOnDoubleClick,
+  startDrag,
+  updateDrag,
+  finishDrag,
+  cancelDrag,
+  resetDrag,
+  itemPosition,
+  isDragging,
+  isRemoteDragging,
+  moveWithKey,
+} = useBoardItemInteractions(viewport, connection, {
+  editItem: openEditor,
+  onMove() {
+    feedback.value = undefined;
+  },
 });
 
 const statusLabel = computed(
@@ -176,28 +206,15 @@ function clearPointer(event: Event) {
   presence.setCursor(null);
 }
 
-function cancelDrag() {
-  if (!drag.value) return;
-  drag.value = undefined;
-  presence.endDrag();
-  sendMessage({ type: "presence.drag-cancelled" });
-}
-
-function boundedPosition(x: number, y: number) {
-  return {
-    x: Math.round(Math.min(BOARD_WIDTH - NOTE_WIDTH, Math.max(0, x))),
-    y: Math.round(Math.min(BOARD_HEIGHT - NOTE_HEIGHT, Math.max(0, y))),
-  };
-}
-
-function openEditor(event: MouseEvent, note?: Note) {
+function openEditor(event: MouseEvent, target: BoardItem | BoardItem["kind"]) {
   if (status.value !== "ready") return;
 
-  if (note) {
-    draft.value = { ...note };
+  const item = typeof target === "object" ? target : undefined;
+  if (item) {
+    draft.value = { ...item };
   } else {
-    if (notes.value.length >= MAX_NOTES) {
-      feedback.value = { kind: "error", message: "This board has reached its note limit." };
+    if (items.value.length >= MAX_ITEMS) {
+      feedback.value = { kind: "error", message: "This board has reached its item limit." };
       return;
     }
 
@@ -206,131 +223,74 @@ function openEditor(event: MouseEvent, note?: Note) {
     const offset =
       Array.from({ length: 12 }, (_, i) => i * 26).find((step) => {
         const position = boundedPosition(left + 28 + step, top + 32 + step);
-        return !notes.value.some(
+        return !items.value.some(
           (item) => Math.abs(item.x - position.x) < 24 && Math.abs(item.y - position.y) < 24,
         );
       }) ?? 0;
 
-    draft.value = {
+    const initial = {
       id: crypto.randomUUID(),
-      color: "yellow",
       text: "",
       ...boundedPosition(left + 28 + offset, top + 32 + offset),
     };
+    draft.value =
+      target === "text"
+        ? { ...initial, kind: "text", style: DEFAULT_TEXT_STYLE }
+        : { ...initial, kind: "note", color: "yellow" };
   }
 
   dialogOpener = event.currentTarget as HTMLElement;
-  editing.value = Boolean(note);
-  saveError.value = "";
+  originalContent.value = item && getItemContent(item);
+  editConflict.value = false;
+  itemError.value = "";
   editorOpen.value = true;
 }
 
-function saveNote() {
-  if (pendingSave.value || !draft.value || !draft.value.text.trim()) return;
-  const note = { ...draft.value, text: draft.value.text.trim() };
+function getItemContent({ id, x, y, ...content }: BoardItem) {
+  return content;
+}
+
+function saveItem(overwrite: boolean) {
+  if (!draft.value?.text.trim() || overwrite !== editConflict.value) return;
+  const item = { ...draft.value, text: draft.value.text.trim() };
   const requestId = crypto.randomUUID();
-  // A previous save may have reached the server before its connection closed.
-  const alreadyExists = editing.value || notes.value.some((item) => item.id === note.id);
-  const message: ClientMessage = alreadyExists
-    ? { type: "note.edit", id: note.id, text: note.text, color: note.color, requestId }
-    : { type: "note.add", note, requestId };
+  const baseContent = overwrite ? null : originalContent.value;
+  const message: ItemChange =
+    baseContent === undefined
+      ? { type: "item.add", item, requestId }
+      : { type: "item.edit", id: item.id, content: getItemContent(item), baseContent, requestId };
 
-  if (!send(message)) return;
-  saveError.value = "";
-  pendingSave.value = requestId;
-  saveTimeout.start();
+  submitItemChange(message);
 }
 
-function finishSave() {
-  saveTimeout.stop();
-  pendingSave.value = undefined;
-}
-
-function interruptSave() {
-  if (!pendingSave.value) return;
-  finishSave();
-  saveError.value = "Couldn’t confirm the save. Your draft is still here.";
-}
-
-function removeNote() {
-  if (draft.value && send({ type: "note.remove", id: draft.value.id })) editorOpen.value = false;
-}
-
-function startDrag(event: PointerEvent, note: Note) {
-  if (event.button !== 0 || status.value !== "ready" || drag.value || !viewport.value) return;
-  const bounds = viewport.value.getBoundingClientRect();
-  const { x, y } = notePosition(note);
-  const handle = event.currentTarget as HTMLElement;
-  handle.setPointerCapture(event.pointerId);
-  drag.value = {
-    id: note.id,
-    pointer: event.pointerId,
-    offsetX: event.clientX - bounds.left + viewport.value.scrollLeft - x,
-    offsetY: event.clientY - bounds.top + viewport.value.scrollTop - y,
-    start: { x, y },
-    x,
-    y,
+function submitItemChange(message: ItemChange) {
+  if (pendingChange.value || !send(message)) return;
+  itemError.value = "";
+  pendingChange.value = {
+    kind: message.type === "item.remove" ? "delete" : "save",
+    requestId: message.requestId,
   };
+  changeTimeout.start();
 }
 
-function updateDrag(event: PointerEvent) {
-  if (!drag.value || drag.value.pointer !== event.pointerId || !viewport.value) return;
-  const bounds = viewport.value.getBoundingClientRect();
-  Object.assign(
-    drag.value,
-    boundedPosition(
-      event.clientX - bounds.left + viewport.value.scrollLeft - drag.value.offsetX,
-      event.clientY - bounds.top + viewport.value.scrollTop - drag.value.offsetY,
-    ),
-  );
-  const { id, x, y } = drag.value;
-  presence.setDrag({ id, x, y });
+function finishItemChange() {
+  changeTimeout.stop();
+  pendingChange.value = undefined;
 }
 
-function finishDrag(event: PointerEvent) {
-  const active = drag.value;
-  if (!active || active.pointer !== event.pointerId) return;
-
-  if (event.type === "pointerup") {
-    updateDrag(event);
-  }
-
-  presence.endDrag();
-  const previous = pendingPosition(active.id) ?? notes.value.find((note) => note.id === active.id);
-  if (
-    event.type === "pointerup" &&
-    previous &&
-    (active.start.x !== active.x || active.start.y !== active.y) &&
-    (previous.x !== active.x || previous.y !== active.y) &&
-    moveNote(active.id, active)
-  ) {
-    feedback.value = undefined;
-  } else {
-    sendMessage({ type: "presence.drag-cancelled" });
-  }
-  drag.value = undefined;
+function interruptItemChange() {
+  const pending = pendingChange.value;
+  if (!pending) return;
+  finishItemChange();
+  itemError.value =
+    pending.kind === "delete"
+      ? "Couldn’t confirm the deletion. Please try again."
+      : "Couldn’t confirm the save. Your draft is still here.";
 }
 
-function notePosition(note: Note) {
-  if (drag.value?.id === note.id) return drag.value;
-  return pendingPosition(note.id) ?? notePreviews.value.get(note.id) ?? note;
-}
-
-function moveWithKey(event: KeyboardEvent, note: Note) {
-  const direction: Record<string, [number, number]> = {
-    ArrowLeft: [-1, 0],
-    ArrowRight: [1, 0],
-    ArrowUp: [0, -1],
-    ArrowDown: [0, 1],
-  };
-  const delta = direction[event.key];
-  if (!delta) return;
-
-  event.preventDefault();
-  const step = event.shiftKey ? 48 : 12;
-  const { x, y } = pendingPosition(note.id) ?? note;
-  if (moveNote(note.id, boundedPosition(x + delta[0] * step, y + delta[1] * step))) {
-    feedback.value = undefined;
+function removeItem() {
+  if (draft.value) {
+    submitItemChange({ type: "item.remove", id: draft.value.id, requestId: crypto.randomUUID() });
   }
 }
 </script>
@@ -353,50 +313,65 @@ function moveWithKey(event: KeyboardEvent, note: Note) {
     <main
       class="mx-auto flex h-[calc(100dvh-4rem)] min-h-96 w-full max-w-screen-2xl flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6"
     >
-      <div class="flex items-center justify-between gap-3">
-        <div>
-          <h1 class="text-xl font-semibold tracking-tight text-highlighted sm:text-2xl">
-            Sticky note board
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="min-w-0 max-w-full">
+          <h1>
+            <BoardTitleDialog :board-id="boardId" :title="title" :disabled="status !== 'ready'" />
           </h1>
           <p class="text-sm text-muted">
-            {{ notes.length }} {{ notes.length === 1 ? "note" : "notes" }}
+            {{ items.length }} {{ items.length === 1 ? "item" : "items" }}
           </p>
         </div>
-        <UButton
-          icon="i-lucide-plus"
-          label="Add note"
-          :disabled="status !== 'ready'"
-          @click="openEditor"
-        />
+        <div class="flex items-center gap-2">
+          <UButton
+            icon="i-lucide-sticky-note"
+            label="Add sticky note"
+            color="neutral"
+            variant="outline"
+            :disabled="status !== 'ready'"
+            @click="openEditor($event, 'note')"
+          />
+          <UButton
+            icon="i-lucide-type"
+            label="Add text"
+            color="neutral"
+            variant="outline"
+            :disabled="status !== 'ready'"
+            @click="openEditor($event, 'text')"
+          />
+        </div>
       </div>
 
       <BoardCanvas
         ref="canvas"
         :cursors="cursors"
-        :show-empty="status === 'ready' && notes.length === 0"
+        :show-empty="status === 'ready' && items.length === 0"
         @pointer-move="movePointer"
         @pointer-leave="clearPointer"
+        @canvas-click="clearSelection"
         @scroll="updateCursorPosition"
       >
-        <BoardNote
-          v-for="note in notes"
-          :key="note.id"
-          :note="note"
-          :position="notePosition(note)"
+        <BoardItemView
+          v-for="item in items"
+          :key="item.id"
+          :item="item"
+          :position="itemPosition(item)"
           :disabled="status !== 'ready'"
-          :dragging="drag?.id === note.id"
-          :remote-dragging="
-            drag?.id !== note.id && !pendingPosition(note.id) && notePreviews.has(note.id)
-          "
-          @drag-start="startDrag($event, note)"
+          :selected="selectedItemId === item.id"
+          :dragging="isDragging(item.id)"
+          :remote-dragging="isRemoteDragging(item.id)"
+          @drag-start="startDrag($event, item)"
           @drag-move="updateDrag"
-          @drag-end="finishDrag"
-          @move-with-key="moveWithKey($event, note)"
-          @edit="openEditor($event, note)"
+          @drag-end="finishDrag($event, item)"
+          @move-with-key="moveWithKey($event, item)"
+          @select="selectItem($event, item)"
+          @double-click="editOnDoubleClick($event, item)"
         />
       </BoardCanvas>
       <div class="flex items-center justify-between gap-3">
-        <p class="text-sm text-muted">Select a note to edit it, or drag its handle to move it.</p>
+        <p class="text-sm text-muted">
+          Drag to move. Double-click, double-tap, or press Enter to edit.
+        </p>
         <UButton
           v-if="displayName"
           color="neutral"
@@ -427,15 +402,17 @@ function moveWithKey(event: KeyboardEvent, note: Note) {
       />
     </div>
 
-    <BoardNoteDialog
+    <BoardItemDialog
       v-model:open="editorOpen"
       v-model:draft="draft"
       :connected="status === 'ready'"
       :editing="editing"
-      :saving="!!pendingSave"
-      :save-error="saveError"
-      @save="saveNote"
-      @remove="removeNote"
+      :conflict="editConflict"
+      :pending="pendingChange?.kind"
+      :error="itemError"
+      @save="saveItem(false)"
+      @overwrite="saveItem(true)"
+      @remove="removeItem"
       @close-auto-focus="restoreDialogFocus"
     />
 

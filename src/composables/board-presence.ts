@@ -14,7 +14,7 @@ export function peerColor(peer: string) {
 export function useBoardPresence(send: (message: ClientMessage) => boolean, name: () => string) {
   const cursors = reactive(new Map<string, Omit<CursorMessage, "cursor"> & { cursor: Cursor }>());
   const drags = reactive(new Map<string, DragMessage>());
-  const notePreviews = computed(
+  const itemPreviews = computed(
     () => new Map(Array.from(drags.values(), (drag) => [drag.id, drag])),
   );
 
@@ -72,7 +72,7 @@ export function useBoardPresence(send: (message: ClientMessage) => boolean, name
         else cursors.delete(message.peer);
         break;
       case "presence.drag":
-        // Use the latest preview if two peers are dragging the same note.
+        // Use the latest preview if two peers are dragging the same item.
         drags.delete(message.peer);
         drags.set(message.peer, message);
         break;
@@ -83,12 +83,12 @@ export function useBoardPresence(send: (message: ClientMessage) => boolean, name
       case "presence.drag-cancelled":
         drags.delete(message.peer);
         break;
-      case "note.updated":
-        if (message.movedBy && drags.get(message.movedBy)?.id === message.note.id) {
+      case "item.updated":
+        if (message.movedBy && drags.get(message.movedBy)?.id === message.item.id) {
           drags.delete(message.movedBy);
         }
         break;
-      case "note.removed":
+      case "item.removed":
         for (const [peer, preview] of drags) {
           if (preview.id === message.id) drags.delete(peer);
         }
@@ -106,5 +106,5 @@ export function useBoardPresence(send: (message: ClientMessage) => boolean, name
     drags.clear();
   }
 
-  return { cursors, notePreviews, setCursor, updateName, setDrag, endDrag, receive, reset };
+  return { cursors, itemPreviews, setCursor, updateName, setDrag, endDrag, receive, reset };
 }
