@@ -36,10 +36,16 @@ function setupInteractions() {
     },
     { editItem, onMove: vi.fn() },
   );
-  return { ...actions, editItem, moveItem };
+  return { ...actions, editItem, moveItem, sendMessage };
 }
 
-function pointer(type: string, pointerType: "mouse" | "touch", clientX: number, timeStamp: number) {
+function pointer(
+  type: string,
+  pointerType: "mouse" | "touch",
+  clientX: number,
+  timeStamp: number,
+  buttons = type === "pointerdown" || type === "pointermove" ? 1 : 0,
+) {
   return {
     type,
     pointerType,
@@ -48,6 +54,7 @@ function pointer(type: string, pointerType: "mouse" | "touch", clientX: number, 
     timeStamp,
     isPrimary: true,
     button: 0,
+    buttons,
     pointerId: 1,
     currentTarget: { setPointerCapture: vi.fn() },
   } as unknown as PointerEvent;
@@ -75,6 +82,7 @@ it("moves an item when dragged and ignores the click generated after releasing i
   expect(interaction.itemPosition(note)).toMatchObject({ x: 50, y: 20 });
 
   interaction.finishDrag(pointer("pointerup", "mouse", 70, 140), note);
+  interaction.finishDrag(pointer("lostpointercapture", "mouse", 70, 140), note);
   interaction.selectItem({ detail: 1 } as MouseEvent, note);
   interaction.editOnDoubleClick({ detail: 2 } as MouseEvent, note);
   expect(interaction.isDragging(note.id)).toBe(false);
@@ -83,4 +91,37 @@ it("moves an item when dragged and ignores the click generated after releasing i
     expect.objectContaining({ x: 50, y: 20 }),
   );
   expect(interaction.editItem).not.toHaveBeenCalled();
+});
+
+it("saves the last preview when mouse capture is lost after release without a pointerup", () => {
+  const interaction = setupInteractions();
+  interaction.startDrag(pointer("pointerdown", "mouse", 40, 100), note);
+  interaction.updateDrag(pointer("pointermove", "mouse", 70, 120));
+
+  interaction.finishDrag(pointer("lostpointercapture", "mouse", 40, 140), note);
+  interaction.finishDrag(pointer("pointerup", "mouse", 40, 141), note);
+
+  expect(interaction.moveItem).toHaveBeenCalledExactlyOnceWith(
+    note.id,
+    expect.objectContaining({ x: 50, y: 20 }),
+  );
+  expect(interaction.sendMessage).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["lostpointercapture", "mouse", 1],
+  ["lostpointercapture", "touch", 0],
+  ["pointercancel", "mouse", 0],
+] as const)("cancels on %s from %s with buttons=%i", (type, pointerType, buttons) => {
+  const interaction = setupInteractions();
+  interaction.startDrag(pointer("pointerdown", pointerType, 40, 100), note);
+  interaction.updateDrag(pointer("pointermove", pointerType, 70, 120));
+
+  interaction.finishDrag(pointer(type, pointerType, 70, 140, buttons), note);
+  interaction.finishDrag(pointer("lostpointercapture", pointerType, 70, 141), note);
+
+  expect(interaction.moveItem).not.toHaveBeenCalled();
+  expect(interaction.sendMessage).toHaveBeenCalledExactlyOnceWith({
+    type: "presence.drag-cancelled",
+  });
 });

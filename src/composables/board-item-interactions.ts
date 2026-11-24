@@ -186,10 +186,14 @@ export function useBoardItemInteractions(
     }
 
     presence.endDrag();
+    // Capture can be lost after release without this item receiving pointerup.
+    // In that case, keep the last drag position instead of using the capture event's coordinates.
+    const releasedWithoutPointerUp =
+      event.type === "lostpointercapture" && event.pointerType === "mouse" && event.buttons === 0;
     const previous =
       pendingPosition(active.id) ?? items.value.find((item) => item.id === active.id);
     if (
-      event.type === "pointerup" &&
+      (event.type === "pointerup" || releasedWithoutPointerUp) &&
       previous &&
       (active.start.x !== active.x || active.start.y !== active.y) &&
       (previous.x !== active.x || previous.y !== active.y) &&
