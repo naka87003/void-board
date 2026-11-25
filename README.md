@@ -1,6 +1,6 @@
 # Void Board
 
-A shared canvas for ideas. Add, edit, move, and delete sticky notes and text together using a private-by-link board.
+A shared canvas for ideas. Add, edit, move, and delete sticky notes, text, lines, and arrows together using a private-by-link board.
 
 ## How it works
 
@@ -23,6 +23,8 @@ Open the URL printed by the dev server and select **Create a board** once. From 
 When you first open a board in a tab, enter a display name or continue as **Guest**. The tab remembers your choice for the session. Drag a note or move your cursor over the canvas to see it update live in the other tab. Select your name below the canvas to change the name shown next to your cursor.
 
 Anyone with the link can edit the board.
+
+Choose **Add line** to add a straight line or arrow. Select it on the board, then drag either endpoint to change its length and direction.
 
 ```sh
 pnpm typecheck

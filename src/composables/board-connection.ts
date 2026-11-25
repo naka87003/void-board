@@ -4,16 +4,17 @@ import {
   DEFAULT_BOARD_TITLE,
   type BoardItem,
   type ClientMessage,
+  type ItemPosition,
+  type LineGeometry,
   type ServerMessage,
 } from "../../shared/board";
 import { useBoardPresence } from "./board-presence";
 
 type BoardError = Extract<ServerMessage, { type: "board.error" }>["reason"];
-type Position = Pick<BoardItem, "x" | "y">;
 type Timer = ReturnType<typeof setTimeout>;
-type PendingMove = { position: Position; requestId: string; saveTimer: Timer | undefined };
+type PendingPosition = { position: ItemPosition; requestId: string; saveTimer: Timer | undefined };
 
-const moveTimeout = 10_000;
+const positionSaveTimeout = 10_000;
 const syncTimeout = 5_000;
 
 export function useBoardConnection(
@@ -31,8 +32,8 @@ export function useBoardConnection(
   const status = ref<"connecting" | "ready" | "disconnected">("connecting");
   const title = ref(DEFAULT_BOARD_TITLE);
   const items = ref<BoardItem[]>([]);
-  const pendingMoves = shallowReactive(new Map<string, PendingMove>());
-  let sync: { requestId: string; timer: Timer; moves: [string, PendingMove][] } | undefined;
+  const pendingPositions = shallowReactive(new Map<string, PendingPosition>());
+  let sync: { requestId: string; timer: Timer; positions: [string, PendingPosition][] } | undefined;
   let socket: ReturnType<typeof connect<"/boards/[board]">> | undefined;
   const presence = useBoardPresence(sendMessage, displayName);
 
@@ -62,9 +63,9 @@ export function useBoardConnection(
             items.value[index] = message.item;
           }
           if (message.movedBy) {
-            const pending = pendingMoves.get(message.item.id);
+            const pending = pendingPositions.get(message.item.id);
             if (pending && pending.requestId === message.requestId) {
-              clearMove(message.item.id);
+              clearPendingPosition(message.item.id);
             }
           } else if (message.requestId) {
             callbacks.onSave(message.requestId, message.item);
@@ -72,7 +73,7 @@ export function useBoardConnection(
           break;
         }
         case "item.removed":
-          clearMove(message.id);
+          clearPendingPosition(message.id);
           items.value = items.value.filter(({ id }) => id !== message.id);
           if (message.requestId) callbacks.onRemove(message.requestId);
           break;
@@ -81,9 +82,9 @@ export function useBoardConnection(
             failSync();
             break;
           }
-          for (const [id, pending] of pendingMoves) {
+          for (const [id, pending] of pendingPositions) {
             if (pending.requestId !== message.requestId) continue;
-            clearMove(id);
+            clearPendingPosition(id);
             callbacks.onError(message.reason);
             return;
           }
@@ -107,20 +108,20 @@ export function useBoardConnection(
   }
 
   function pendingPosition(id: string) {
-    return pendingMoves.get(id)?.position;
+    return pendingPositions.get(id)?.position;
   }
 
-  function clearMove(id: string) {
-    const pending = pendingMoves.get(id);
+  function clearPendingPosition(id: string) {
+    const pending = pendingPositions.get(id);
     if (!pending) return;
     clearTimeout(pending.saveTimer);
-    pendingMoves.delete(id);
+    pendingPositions.delete(id);
   }
 
   function resetPendingRequests() {
     clearTimeout(sync?.timer);
     sync = undefined;
-    for (const id of pendingMoves.keys()) clearMove(id);
+    for (const id of pendingPositions.keys()) clearPendingPosition(id);
   }
 
   function syncBoard() {
@@ -128,20 +129,22 @@ export function useBoardConnection(
     const requestId = crypto.randomUUID();
     if (!sendMessage({ type: "board.sync", requestId })) return;
 
-    // Include only moves whose save deadline passed before this request.
-    const moves = Array.from(pendingMoves).filter(([, move]) => move.saveTimer === undefined);
-    sync = { requestId, moves, timer: setTimeout(failSync, syncTimeout) };
+    // Include only position changes whose save deadline passed before this request.
+    const positions = Array.from(pendingPositions).filter(
+      ([, pending]) => pending.saveTimer === undefined,
+    );
+    sync = { requestId, positions, timer: setTimeout(failSync, syncTimeout) };
   }
 
   function finishSync() {
     if (!sync) return;
     clearTimeout(sync.timer);
-    for (const [id, move] of sync.moves) {
-      if (pendingMoves.get(id) === move) clearMove(id);
+    for (const [id, pending] of sync.positions) {
+      if (pendingPositions.get(id) === pending) clearPendingPosition(id);
     }
     sync = undefined;
-    for (const move of pendingMoves.values()) {
-      if (move.saveTimer !== undefined) continue;
+    for (const pending of pendingPositions.values()) {
+      if (pending.saveTimer !== undefined) continue;
       syncBoard();
       break;
     }
@@ -152,18 +155,31 @@ export function useBoardConnection(
     callbacks.onSyncError();
   }
 
-  function moveItem(id: string, { x, y }: Position) {
-    const requestId = crypto.randomUUID();
-    if (!sendMessage({ type: "item.move", id, x, y, requestId })) return false;
+  function moveItem(id: string, { x, y }: ItemPosition) {
+    return savePosition({ type: "item.move", id, x, y, requestId: crypto.randomUUID() }, { x, y });
+  }
 
-    clearMove(id);
+  function resizeItem(id: string, geometry: LineGeometry, base: LineGeometry) {
+    return savePosition(
+      { type: "item.resize", id, geometry, base, requestId: crypto.randomUUID() },
+      geometry,
+    );
+  }
+
+  function savePosition(
+    message: Extract<ClientMessage, { type: "item.move" | "item.resize" }> & { requestId: string },
+    position: ItemPosition,
+  ) {
+    if (!sendMessage(message)) return false;
+    const { id } = message;
+    clearPendingPosition(id);
     const saveTimer = setTimeout(() => {
-      const move = pendingMoves.get(id);
-      if (!move) return;
-      move.saveTimer = undefined;
+      const pending = pendingPositions.get(id);
+      if (!pending) return;
+      pending.saveTimer = undefined;
       syncBoard();
-    }, moveTimeout);
-    pendingMoves.set(id, { position: { x, y }, requestId, saveTimer });
+    }, positionSaveTimeout);
+    pendingPositions.set(id, { position, requestId: message.requestId, saveTimer });
     return true;
   }
 
@@ -182,6 +198,7 @@ export function useBoardConnection(
     connectBoard,
     sendMessage,
     moveItem,
+    resizeItem,
     pendingPosition,
   };
 }

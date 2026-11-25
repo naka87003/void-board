@@ -12,7 +12,7 @@ function setupRoom() {
   const closing = { id: "closing", send: vi.fn().mockRejectedValue(new Error("Socket closed")) };
   const peer = { id: "peer", send: vi.fn().mockResolvedValue(undefined) };
   const connections = [closing, peer, sender];
-  const transaction = { delete: vi.fn().mockResolvedValue(true), get: vi.fn() };
+  const transaction = { delete: vi.fn().mockResolvedValue(true), get: vi.fn(), put: vi.fn() };
   const context = {
     connection: sender,
     room: {
@@ -55,4 +55,55 @@ it("reports a failed move even when a peer cannot receive the drag cancellation"
     reason: "missing",
     requestId,
   });
+});
+
+it("saves a resize while preserving arrow style and rejects a stale second resize", async () => {
+  const { context, sender, peer, transaction } = setupRoom();
+  const base = { x: 40, y: 40, dx: 120, dy: 0 };
+  const geometry = { x: 50, y: 100, dx: 110, dy: -60 };
+  const line = {
+    kind: "line",
+    arrow: true,
+    style: { width: 4, pattern: "dashed" },
+    id,
+    ...base,
+  } as const;
+  const resized = { ...line, ...geometry };
+  transaction.get.mockResolvedValueOnce(line).mockResolvedValueOnce(resized);
+
+  await onMessage(context, { type: "item.resize", id, geometry, base, requestId });
+  expect(transaction.put).toHaveBeenCalledExactlyOnceWith(`item:${id}`, resized);
+  expect(peer.send).toHaveBeenCalledExactlyOnceWith({
+    type: "item.updated",
+    item: resized,
+    movedBy: senderId,
+  });
+
+  await onMessage(context, {
+    type: "item.resize",
+    id,
+    geometry: { ...geometry, dy: 60 },
+    base,
+    requestId,
+  });
+  expect(transaction.put).toHaveBeenCalledTimes(1);
+  expect(sender.send).toHaveBeenLastCalledWith({
+    type: "board.error",
+    reason: "conflict",
+    requestId,
+  });
+});
+
+it("edits the style of an existing arrow without changing its geometry", async () => {
+  const { context, peer, transaction } = setupRoom();
+  const baseContent = { kind: "line", arrow: true } as const;
+  const line = { ...baseContent, id, x: 40, y: 40, dx: 120, dy: 0 };
+  const content = { ...baseContent, style: { width: 4, pattern: "dashed" } } as const;
+  transaction.get.mockResolvedValueOnce(line);
+
+  await onMessage(context, { type: "item.edit", id, content, baseContent, requestId });
+
+  const edited = { ...line, ...content };
+  expect(transaction.put).toHaveBeenCalledExactlyOnceWith(`item:${id}`, edited);
+  expect(peer.send).toHaveBeenCalledExactlyOnceWith({ type: "item.updated", item: edited });
 });

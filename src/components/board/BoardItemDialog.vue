@@ -8,9 +8,13 @@ import UTextarea from "@nuxt/ui/components/Textarea.vue";
 import { computed } from "vue";
 import {
   colors,
+  DEFAULT_LINE_STYLE,
+  LINE_PATTERNS,
+  LINE_WIDTHS,
   MAX_TEXT,
   TEXT_FONT_SIZES,
   type BoardItem,
+  type LineStyle,
   type Note,
   type TextStyle,
 } from "../../../shared/board";
@@ -35,7 +39,25 @@ const emit = defineEmits<{
 
 const colorOptions = colors.map((value) => ({ value, ...noteColors[value] }));
 const sizeOptions = TEXT_FONT_SIZES.map((value) => ({ value, label: `${value} px` }));
+const lineOptions = [
+  { value: "line" as const, label: "Line" },
+  { value: "arrow" as const, label: "Arrow" },
+];
+const lineWidthLabels = { 1: "Thin", 2: "Standard", 4: "Thick" };
+const lineWidthOptions = LINE_WIDTHS.map((value) => ({
+  value,
+  label: lineWidthLabels[value],
+}));
+const linePatternOptions = LINE_PATTERNS.map((value) => ({
+  value,
+  label: value === "solid" ? "Solid" : "Dashed",
+}));
+const draftLineStyle = computed(() =>
+  draft.value?.kind === "line" ? (draft.value.style ?? DEFAULT_LINE_STYLE) : DEFAULT_LINE_STYLE,
+);
+const canSave = computed(() => draft.value?.kind === "line" || Boolean(draft.value?.text.trim()));
 const title = computed(() => {
+  if (draft.value?.kind === "line") return editing ? "Edit line" : "Add line";
   if (draft.value?.kind === "text") return editing ? "Edit text" : "Add text";
   return editing ? "Edit sticky note" : "New sticky note";
 });
@@ -45,7 +67,17 @@ const modalContent = {
 };
 
 function updateText(text: string) {
-  if (draft.value) draft.value = { ...draft.value, text };
+  if (draft.value && draft.value.kind !== "line") draft.value = { ...draft.value, text };
+}
+
+function updateLine(type: (typeof lineOptions)[number]["value"]) {
+  if (draft.value?.kind === "line") draft.value = { ...draft.value, arrow: type === "arrow" };
+}
+
+function updateLineStyle(style: Partial<LineStyle>) {
+  if (draft.value?.kind === "line") {
+    draft.value = { ...draft.value, style: { ...draftLineStyle.value, ...style } };
+  }
 }
 
 function updateColor(color: Note["color"]) {
@@ -70,6 +102,7 @@ function updateTextStyle(style: Partial<TextStyle>) {
     <template #body="{ close }">
       <form v-if="draft" class="grid gap-5" @submit.prevent="emit('save')">
         <UFormField
+          v-if="draft.kind !== 'line'"
           label="Text"
           :help="`${draft.text.length} / ${MAX_TEXT}`"
           :ui="{ help: 'text-end tabular-nums' }"
@@ -86,6 +119,35 @@ function updateTextStyle(style: Partial<TextStyle>) {
             class="w-full"
           />
         </UFormField>
+        <div v-else class="grid gap-4">
+          <URadioGroup
+            legend="Type"
+            variant="table"
+            orientation="horizontal"
+            :items="lineOptions"
+            :model-value="draft.arrow ? 'arrow' : 'line'"
+            :disabled="busy"
+            @update:model-value="updateLine"
+          />
+          <URadioGroup
+            legend="Thickness"
+            variant="table"
+            orientation="horizontal"
+            :items="lineWidthOptions"
+            :model-value="draftLineStyle.width"
+            :disabled="busy"
+            @update:model-value="updateLineStyle({ width: $event })"
+          />
+          <URadioGroup
+            legend="Line style"
+            variant="table"
+            orientation="horizontal"
+            :items="linePatternOptions"
+            :model-value="draftLineStyle.pattern"
+            :disabled="busy"
+            @update:model-value="updateLineStyle({ pattern: $event })"
+          />
+        </div>
         <URadioGroup
           v-if="draft.kind === 'note'"
           :model-value="draft.color"
@@ -107,7 +169,7 @@ function updateTextStyle(style: Partial<TextStyle>) {
             </span>
           </template>
         </URadioGroup>
-        <div v-else class="grid gap-4">
+        <div v-else-if="draft.kind === 'text'" class="grid gap-4">
           <URadioGroup
             legend="Size"
             variant="table"
@@ -165,14 +227,14 @@ function updateTextStyle(style: Partial<TextStyle>) {
             :label="pending === 'save' ? 'Saving…' : 'Overwrite'"
             type="button"
             color="warning"
-            :disabled="!connected || busy || !draft.text.trim()"
+            :disabled="!connected || busy || !canSave"
             @click="emit('overwrite')"
           />
           <UButton
             v-else
             :label="pending === 'save' ? 'Saving…' : 'Save'"
             type="submit"
-            :disabled="!connected || busy || !draft.text.trim()"
+            :disabled="!connected || busy || !canSave"
           />
         </div>
       </form>

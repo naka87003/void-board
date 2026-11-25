@@ -48,7 +48,7 @@ defineExpose({ viewport });
       v-if="showEmpty"
       class="pointer-events-none absolute inset-0 grid place-content-center px-4 text-center text-sm text-muted"
     >
-      <p>Add a sticky note or text to get started</p>
+      <p>Add a sticky note, text, or line to get started</p>
     </div>
   </div>
 </template>

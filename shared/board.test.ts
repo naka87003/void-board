@@ -5,6 +5,7 @@ import {
   boardTitleForm,
   clientMessage,
   DEFAULT_BOARD_TITLE,
+  DEFAULT_LINE_STYLE,
   MAX_BOARD_TITLE,
   MAX_NAME,
   MAX_TEXT,
@@ -13,6 +14,7 @@ import {
   sameItemContent,
   serverMessage,
   type BoardItem,
+  type BoardLine,
   type Note,
 } from "./board";
 
@@ -33,6 +35,15 @@ const textItem = {
   x: note.x,
   y: note.y,
 } satisfies BoardItem;
+const line = {
+  kind: "line",
+  arrow: true,
+  id: "00000000-0000-4000-8000-000000000004",
+  x: 100,
+  y: 100,
+  dx: -80,
+  dy: 60,
+} satisfies BoardLine;
 
 it("accepts a blank or trimmed board name and rejects names over the limit", () => {
   expect(boardTitleForm.parse({ title: "  " })).toEqual({ title: "" });
@@ -103,6 +114,24 @@ describe("client messages", () => {
     ).toBe(false);
   });
 
+  it("validates both endpoints in line additions and resize messages", () => {
+    const add = { type: "item.add", item: line };
+    const base = { x: line.x, y: line.y, dx: line.dx, dy: line.dy };
+    const resize = {
+      type: "item.resize",
+      id: line.id,
+      geometry: { ...base, dx: 80, dy: -60 },
+      base,
+      requestId,
+    };
+    expect(clientMessage.parse(add)).toEqual(add);
+    expect(clientMessage.parse(resize)).toEqual(resize);
+    expect(clientMessage.safeParse({ ...add, item: { ...line, dx: -100 } }).success).toBe(false);
+    expect(
+      clientMessage.safeParse({ ...resize, geometry: { ...base, dx: 0, dy: 0 } }).success,
+    ).toBe(false);
+  });
+
   it("trims display names and allows cursors at the board edge or absent", () => {
     const name = "😀".repeat(MAX_NAME / 2);
     const message = { type: "presence.cursor", name, cursor: { x: BOARD_WIDTH, y: BOARD_HEIGHT } };
@@ -123,6 +152,16 @@ it("compares content independently of position and detects formatting changes", 
   );
 });
 
+it("compares legacy line styles as standard and solid and detects each style change", () => {
+  expect(sameItemContent(line, { ...line, style: DEFAULT_LINE_STYLE })).toBe(true);
+  expect(sameItemContent(line, { ...line, style: { ...DEFAULT_LINE_STYLE, width: 4 } })).toBe(
+    false,
+  );
+  expect(
+    sameItemContent(line, { ...line, style: { ...DEFAULT_LINE_STYLE, pattern: "dashed" } }),
+  ).toBe(false);
+});
+
 describe("server messages", () => {
   it("validates items inside a board snapshot", () => {
     const snapshot = { type: "board.snapshot", title: DEFAULT_BOARD_TITLE, items: [note] };
@@ -133,10 +172,22 @@ describe("server messages", () => {
     ).toBe(false);
   });
 
-  it("preserves both sticky notes and text in snapshots", () => {
-    const snapshot = { type: "board.snapshot", title: "Planning", items: [note, textItem] };
+  it("preserves sticky notes, text, and lines in snapshots", () => {
+    const snapshot = { type: "board.snapshot", title: "Planning", items: [note, textItem, line] };
 
     expect(serverMessage.parse(snapshot)).toEqual(snapshot);
+  });
+
+  it("preserves supported line styling in snapshots and rejects unsupported styling", () => {
+    const styledLine = { ...line, style: { width: 4, pattern: "dashed" } };
+    const snapshot = { type: "board.snapshot", title: "Planning", items: [styledLine] };
+    expect(serverMessage.parse(snapshot)).toEqual(snapshot);
+    expect(
+      serverMessage.safeParse({
+        ...snapshot,
+        items: [{ ...styledLine, style: { ...styledLine.style, width: 3 } }],
+      }).success,
+    ).toBe(false);
   });
 
   it("preserves the request ID on save acknowledgements and board errors", () => {

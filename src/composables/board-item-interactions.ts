@@ -2,9 +2,14 @@ import { ref, watch, type Ref } from "vue";
 import {
   BOARD_HEIGHT,
   BOARD_WIDTH,
-  NOTE_HEIGHT,
-  NOTE_WIDTH,
+  LINE_INSET,
+  itemPositionLimits,
+  sameLineGeometry,
+  validLineGeometry,
   type BoardItem,
+  type BoardLine,
+  type ItemPosition,
+  type LineGeometry,
 } from "../../shared/board";
 import type { useBoardConnection } from "./board-connection";
 
@@ -15,11 +20,26 @@ const arrowDirections: Partial<Record<string, [number, number]>> = {
   ArrowDown: [0, 1],
 };
 
-export function boundedPosition(x: number, y: number) {
+export function boundedPosition(x: number, y: number, vector?: Pick<LineGeometry, "dx" | "dy">) {
+  const { minX, minY, maxX, maxY } = itemPositionLimits(vector);
   return {
-    x: Math.round(Math.min(BOARD_WIDTH - NOTE_WIDTH, Math.max(0, x))),
-    y: Math.round(Math.min(BOARD_HEIGHT - NOTE_HEIGHT, Math.max(0, y))),
+    x: Math.round(Math.min(maxX, Math.max(minX, x))),
+    y: Math.round(Math.min(maxY, Math.max(minY, y))),
   };
+}
+
+type LineEnd = "start" | "end";
+
+function resizeLine(base: LineGeometry, end: LineEnd, x: number, y: number) {
+  const point = {
+    x: Math.round(Math.min(BOARD_WIDTH - LINE_INSET, Math.max(LINE_INSET, x))),
+    y: Math.round(Math.min(BOARD_HEIGHT - LINE_INSET, Math.max(LINE_INSET, y))),
+  };
+  const geometry =
+    end === "start"
+      ? { ...point, dx: base.x + base.dx - point.x, dy: base.y + base.dy - point.y }
+      : { x: base.x, y: base.y, dx: point.x - base.x, dy: point.y - base.y };
+  return validLineGeometry(geometry) ? geometry : undefined;
 }
 
 export function useBoardItemInteractions(
@@ -30,10 +50,11 @@ export function useBoardItemInteractions(
     pendingPosition,
     presence,
     moveItem,
+    resizeItem,
     sendMessage,
   }: Pick<
     ReturnType<typeof useBoardConnection>,
-    "items" | "status" | "pendingPosition" | "presence" | "moveItem" | "sendMessage"
+    "items" | "status" | "pendingPosition" | "presence" | "moveItem" | "resizeItem" | "sendMessage"
   >,
   {
     editItem,
@@ -48,9 +69,19 @@ export function useBoardItemInteractions(
     offsetX: number;
     offsetY: number;
     start: Pick<BoardItem, "x" | "y">;
+    vector?: Pick<LineGeometry, "dx" | "dy">;
     moved: boolean;
     x: number;
     y: number;
+  }>();
+  const resize = ref<{
+    id: string;
+    pointer: number;
+    end: LineEnd;
+    base: LineGeometry;
+    offsetX: number;
+    offsetY: number;
+    geometry: LineGeometry;
   }>();
   let ignorePointerClick = false;
   let firstClickItemId: string | undefined;
@@ -61,6 +92,9 @@ export function useBoardItemInteractions(
   watch(items, (currentItems) => {
     const active = drag.value;
     if (active && !currentItems.some((item) => item.id === active.id)) cancelDrag();
+    if (resize.value && !currentItems.some((item) => item.id === resize.value?.id)) {
+      resize.value = undefined;
+    }
     if (selectedItemId.value && !currentItems.some((item) => item.id === selectedItemId.value)) {
       clearSelection();
     }
@@ -68,6 +102,7 @@ export function useBoardItemInteractions(
 
   function resetDrag() {
     drag.value = undefined;
+    resize.value = undefined;
     lastTap = undefined;
   }
 
@@ -124,6 +159,8 @@ export function useBoardItemInteractions(
       event.button !== 0 ||
       status.value !== "ready" ||
       drag.value ||
+      resize.value ||
+      pendingPosition(item.id)?.dx !== undefined ||
       !viewport.value
     )
       return;
@@ -140,6 +177,7 @@ export function useBoardItemInteractions(
       offsetX: event.clientX - bounds.left + viewport.value.scrollLeft - x,
       offsetY: event.clientY - bounds.top + viewport.value.scrollTop - y,
       start: { x, y },
+      vector: item.kind === "line" ? { dx: item.dx, dy: item.dy } : undefined,
       moved: false,
       x,
       y,
@@ -164,6 +202,7 @@ export function useBoardItemInteractions(
       boundedPosition(
         event.clientX - bounds.left + viewport.value.scrollLeft - active.offsetX,
         event.clientY - bounds.top + viewport.value.scrollTop - active.offsetY,
+        active.vector,
       ),
     );
     const { id, x, y } = active;
@@ -205,9 +244,103 @@ export function useBoardItemInteractions(
     }
   }
 
-  function itemPosition(item: BoardItem) {
+  function itemPosition(item: BoardItem): ItemPosition {
+    if (resize.value?.id === item.id) return resize.value.geometry;
     if (drag.value?.id === item.id && drag.value.moved) return drag.value;
     return pendingPosition(item.id) ?? itemPreviews.value.get(item.id) ?? item;
+  }
+
+  function pointerOnBoard(event: PointerEvent) {
+    const element = viewport.value;
+    if (!element) return;
+    const bounds = element.getBoundingClientRect();
+    return {
+      x: event.clientX - bounds.left - element.clientLeft + element.scrollLeft,
+      y: event.clientY - bounds.top - element.clientTop + element.scrollTop,
+    };
+  }
+
+  function startResize(event: PointerEvent, item: BoardLine, end: LineEnd) {
+    if (
+      !event.isPrimary ||
+      event.button !== 0 ||
+      status.value !== "ready" ||
+      drag.value ||
+      resize.value ||
+      pendingPosition(item.id) ||
+      isRemoteDragging(item.id)
+    )
+      return;
+    const point = pointerOnBoard(event);
+    if (!point) return;
+    const { x, y, dx, dy } = item;
+    const base = { x, y, dx, dy };
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    resize.value = {
+      id: item.id,
+      pointer: event.pointerId,
+      end,
+      base,
+      offsetX: point.x - (end === "start" ? x : x + dx),
+      offsetY: point.y - (end === "start" ? y : y + dy),
+      geometry: base,
+    };
+  }
+
+  function updateResize(event: PointerEvent) {
+    const active = resize.value;
+    if (active?.pointer !== event.pointerId) return;
+    const point = pointerOnBoard(event);
+    if (!point) return;
+    const geometry = resizeLine(
+      active.base,
+      active.end,
+      point.x - active.offsetX,
+      point.y - active.offsetY,
+    );
+    if (geometry) active.geometry = geometry;
+  }
+
+  function finishResize(event: PointerEvent) {
+    const active = resize.value;
+    if (active?.pointer !== event.pointerId) return;
+    if (event.type === "pointerup") updateResize(event);
+    resize.value = undefined;
+    if (
+      event.type !== "pointerup" &&
+      !(event.type === "lostpointercapture" && event.pointerType === "mouse" && event.buttons === 0)
+    )
+      return;
+    if (
+      !sameLineGeometry(active.base, active.geometry) &&
+      resizeItem(active.id, active.geometry, active.base)
+    )
+      onMove();
+  }
+
+  function resizeWithKey(event: KeyboardEvent, item: BoardLine, end: LineEnd) {
+    const delta = arrowDirections[event.key];
+    if (!delta) return;
+    event.preventDefault();
+    if (
+      status.value !== "ready" ||
+      drag.value ||
+      resize.value ||
+      pendingPosition(item.id) ||
+      isRemoteDragging(item.id)
+    )
+      return;
+    const { x, y, dx, dy } = item;
+    const base = { x, y, dx, dy };
+    const step = event.shiftKey ? 48 : 12;
+    const geometry = resizeLine(
+      base,
+      end,
+      (end === "start" ? x : x + dx) + delta[0] * step,
+      (end === "start" ? y : y + dy) + delta[1] * step,
+    );
+    if (geometry && !sameLineGeometry(geometry, base) && resizeItem(item.id, geometry, base))
+      onMove();
   }
 
   function moveWithKey(event: KeyboardEvent, item: BoardItem) {
@@ -215,9 +348,11 @@ export function useBoardItemInteractions(
     if (!delta) return;
 
     event.preventDefault();
+    if (resize.value || pendingPosition(item.id)?.dx !== undefined) return;
     const step = event.shiftKey ? 48 : 12;
     const { x, y } = pendingPosition(item.id) ?? item;
-    if (moveItem(item.id, boundedPosition(x + delta[0] * step, y + delta[1] * step))) {
+    const vector = item.kind === "line" ? item : undefined;
+    if (moveItem(item.id, boundedPosition(x + delta[0] * step, y + delta[1] * step, vector))) {
       selectedItemId.value = item.id;
       onMove();
     }
@@ -225,6 +360,10 @@ export function useBoardItemInteractions(
 
   function isDragging(id: string) {
     return drag.value?.id === id && drag.value.moved;
+  }
+
+  function resizingEnd(id: string) {
+    return resize.value?.id === id ? resize.value.end : undefined;
   }
 
   function isRemoteDragging(id: string) {
@@ -239,10 +378,15 @@ export function useBoardItemInteractions(
     startDrag,
     updateDrag,
     finishDrag,
+    startResize,
+    updateResize,
+    finishResize,
+    resizeWithKey,
     cancelDrag,
     resetDrag,
     itemPosition,
     isDragging,
+    resizingEnd,
     isRemoteDragging,
     moveWithKey,
   };

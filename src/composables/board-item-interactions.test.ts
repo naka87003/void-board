@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vite-plus/test";
 import { ref } from "vue";
-import type { BoardItem } from "../../shared/board";
+import { BOARD_WIDTH, LINE_INSET, type BoardItem, type BoardLine } from "../../shared/board";
 import { useBoardItemInteractions } from "./board-item-interactions";
 import { useBoardPresence } from "./board-presence";
 
@@ -12,31 +12,44 @@ const note = {
   x: 20,
   y: 20,
 } satisfies BoardItem;
+const line = {
+  id: "00000000-0000-4000-8000-000000000002",
+  kind: "line",
+  arrow: true,
+  x: 40,
+  y: 40,
+  dx: 80,
+  dy: 0,
+} satisfies BoardLine;
 
-function setupInteractions() {
+function setupInteractions(items: BoardItem[] = [note]) {
   const viewport = ref({
     getBoundingClientRect: () => ({ left: 0, top: 0 }),
     scrollLeft: 0,
     scrollTop: 0,
+    clientLeft: 0,
+    clientTop: 0,
   } as HTMLDivElement);
   const sendMessage = vi.fn(() => true);
   const moveItem = vi.fn(() => true);
+  const resizeItem = vi.fn(() => true);
   const editItem = vi.fn();
   const presence = useBoardPresence(sendMessage, () => "Guest");
   vi.spyOn(presence, "setDrag").mockImplementation(() => {});
   const actions = useBoardItemInteractions(
     viewport,
     {
-      items: ref([note]),
+      items: ref(items),
       status: ref("ready"),
       pendingPosition: () => undefined,
       presence,
       moveItem,
+      resizeItem,
       sendMessage,
     },
     { editItem, onMove: vi.fn() },
   );
-  return { ...actions, editItem, moveItem, sendMessage };
+  return { ...actions, editItem, moveItem, resizeItem, sendMessage };
 }
 
 function pointer(
@@ -124,4 +137,34 @@ it.each([
   expect(interaction.sendMessage).toHaveBeenCalledExactlyOnceWith({
     type: "presence.drag-cancelled",
   });
+});
+
+it("drags a line’s start past its end while keeping the end anchored", () => {
+  const interaction = setupInteractions([line]);
+  interaction.startResize(pointer("pointerdown", "mouse", 40, 100), line, "start");
+  expect(interaction.resizingEnd(line.id)).toBe("start");
+  interaction.updateResize({ ...pointer("pointermove", "mouse", 160, 120), clientY: 90 });
+
+  const geometry = { x: 160, y: 90, dx: -40, dy: -50 };
+  expect(interaction.itemPosition(line)).toEqual(geometry);
+  interaction.finishResize({ ...pointer("pointerup", "mouse", 160, 140), clientY: 90 });
+  expect(interaction.resizingEnd(line.id)).toBeUndefined();
+
+  expect(interaction.resizeItem).toHaveBeenCalledExactlyOnceWith(line.id, geometry, {
+    x: 40,
+    y: 40,
+    dx: 80,
+    dy: 0,
+  });
+});
+
+it("limits a line’s translation to the position where both ends fit", () => {
+  const interaction = setupInteractions([line]);
+  interaction.startDrag(pointer("pointerdown", "mouse", 80, 100), line);
+  interaction.finishDrag(pointer("pointerup", "mouse", BOARD_WIDTH, 140), line);
+
+  expect(interaction.moveItem).toHaveBeenCalledExactlyOnceWith(
+    line.id,
+    expect.objectContaining({ x: BOARD_WIDTH - LINE_INSET - line.dx, y: line.y }),
+  );
 });

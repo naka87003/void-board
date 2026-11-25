@@ -8,6 +8,7 @@ import { routeUrl } from "void/routes";
 import {
   BOARD_HEIGHT,
   BOARD_WIDTH,
+  DEFAULT_LINE_STYLE,
   DEFAULT_TEXT_STYLE,
   MAX_NAME,
   MAX_ITEMS,
@@ -42,6 +43,10 @@ const choosingInitialName = ref(!displayName.value);
 const nameDialogOpen = ref(choosingInitialName.value);
 const nameDraft = ref("");
 const draft = ref<BoardItem>();
+const normalizedDraft = computed(() => {
+  const item = draft.value;
+  return item && item.kind !== "line" ? { ...item, text: item.text.trim() } : item;
+});
 const originalContent = shallowRef<ItemContent>();
 const editConflict = ref(false);
 const editing = computed(() => Boolean(originalContent.value) || editConflict.value);
@@ -67,8 +72,8 @@ const connection = useBoardConnection(boardId, displayName, {
   onSave(requestId, item) {
     if (pendingChange.value?.kind !== "save" || requestId !== pendingChange.value.requestId) return;
     finishItemChange();
-    const current = draft.value;
-    if (current && !sameItemContent(item, { ...current, text: current.text.trim() })) {
+    const current = normalizedDraft.value;
+    if (current && !sameItemContent(item, current)) {
       editConflict.value = true;
       return;
     }
@@ -86,6 +91,11 @@ const connection = useBoardConnection(boardId, displayName, {
       if (pending?.kind === "save" && requestId === pending.requestId) {
         finishItemChange();
         editConflict.value = true;
+      } else if (!requestId) {
+        feedback.value = {
+          kind: "error",
+          message: "This line moved or changed size. Try resizing it again.",
+        };
       }
       return;
     }
@@ -94,6 +104,7 @@ const connection = useBoardConnection(boardId, displayName, {
       missing: "This item has already been deleted.",
       kind: "This item’s type does not match your draft.",
       storage: "Couldn’t save your changes. Please try again.",
+      position: "This item must stay inside the board.",
     }[reason];
     if (!requestId) {
       feedback.value = { kind: "error", message };
@@ -116,10 +127,15 @@ const {
   startDrag,
   updateDrag,
   finishDrag,
+  startResize,
+  updateResize,
+  finishResize,
+  resizeWithKey,
   cancelDrag,
   resetDrag,
   itemPosition,
   isDragging,
+  resizingEnd,
   isRemoteDragging,
   moveWithKey,
 } = useBoardItemInteractions(viewport, connection, {
@@ -220,9 +236,10 @@ function openEditor(event: MouseEvent, target: BoardItem | BoardItem["kind"]) {
 
     const left = viewport.value?.scrollLeft ?? 0;
     const top = viewport.value?.scrollTop ?? 0;
+    const vector = target === "line" ? { dx: 140, dy: 0 } : undefined;
     const offset =
       Array.from({ length: 12 }, (_, i) => i * 26).find((step) => {
-        const position = boundedPosition(left + 28 + step, top + 32 + step);
+        const position = boundedPosition(left + 28 + step, top + 32 + step, vector);
         return !items.value.some(
           (item) => Math.abs(item.x - position.x) < 24 && Math.abs(item.y - position.y) < 24,
         );
@@ -230,13 +247,21 @@ function openEditor(event: MouseEvent, target: BoardItem | BoardItem["kind"]) {
 
     const initial = {
       id: crypto.randomUUID(),
-      text: "",
-      ...boundedPosition(left + 28 + offset, top + 32 + offset),
+      ...boundedPosition(left + 28 + offset, top + 32 + offset, vector),
     };
-    draft.value =
-      target === "text"
-        ? { ...initial, kind: "text", style: DEFAULT_TEXT_STYLE }
-        : { ...initial, kind: "note", color: "yellow" };
+    if (vector) {
+      draft.value = {
+        ...initial,
+        ...vector,
+        kind: "line",
+        arrow: false,
+        style: DEFAULT_LINE_STYLE,
+      };
+    } else if (target === "text") {
+      draft.value = { ...initial, kind: "text", text: "", style: DEFAULT_TEXT_STYLE };
+    } else {
+      draft.value = { ...initial, kind: "note", text: "", color: "yellow" };
+    }
   }
 
   dialogOpener = event.currentTarget as HTMLElement;
@@ -247,12 +272,15 @@ function openEditor(event: MouseEvent, target: BoardItem | BoardItem["kind"]) {
 }
 
 function getItemContent({ id, x, y, ...content }: BoardItem) {
+  if (content.kind === "line") {
+    return { kind: content.kind, arrow: content.arrow, style: content.style };
+  }
   return content;
 }
 
 function saveItem(overwrite: boolean) {
-  if (!draft.value?.text.trim() || overwrite !== editConflict.value) return;
-  const item = { ...draft.value, text: draft.value.text.trim() };
+  const item = normalizedDraft.value;
+  if (!item || (item.kind !== "line" && !item.text) || overwrite !== editConflict.value) return;
   const requestId = crypto.randomUUID();
   const baseContent = overwrite ? null : originalContent.value;
   const message: ItemChange =
@@ -322,7 +350,7 @@ function removeItem() {
             {{ items.length }} {{ items.length === 1 ? "item" : "items" }}
           </p>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
           <UButton
             icon="i-lucide-sticky-note"
             label="Add sticky note"
@@ -338,6 +366,14 @@ function removeItem() {
             variant="outline"
             :disabled="status !== 'ready'"
             @click="openEditor($event, 'text')"
+          />
+          <UButton
+            icon="i-lucide-move-up-right"
+            label="Add line"
+            color="neutral"
+            variant="outline"
+            :disabled="status !== 'ready'"
+            @click="openEditor($event, 'line')"
           />
         </div>
       </div>
@@ -359,6 +395,7 @@ function removeItem() {
           :disabled="status !== 'ready'"
           :selected="selectedItemId === item.id"
           :dragging="isDragging(item.id)"
+          :resizing-end="resizingEnd(item.id)"
           :remote-dragging="isRemoteDragging(item.id)"
           @drag-start="startDrag($event, item)"
           @drag-move="updateDrag"
@@ -366,11 +403,16 @@ function removeItem() {
           @move-with-key="moveWithKey($event, item)"
           @select="selectItem($event, item)"
           @double-click="editOnDoubleClick($event, item)"
+          @resize-start="(event, end) => item.kind === 'line' && startResize(event, item, end)"
+          @resize-move="updateResize"
+          @resize-end="finishResize"
+          @resize-with-key="(event, end) => item.kind === 'line' && resizeWithKey(event, item, end)"
         />
       </BoardCanvas>
       <div class="flex items-center justify-between gap-3">
         <p class="text-sm text-muted">
-          Drag to move. Double-click, double-tap, or press Enter to edit.
+          Drag to move. Select a line and drag either end to resize. Double-click, double-tap, or
+          press Enter to edit.
         </p>
         <UButton
           v-if="displayName"

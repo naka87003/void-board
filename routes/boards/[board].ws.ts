@@ -5,7 +5,9 @@ import {
   idPattern,
   MAX_ITEMS,
   sameItemContent,
+  sameLineGeometry,
   serverMessage,
+  validItemPosition,
   type BoardItem,
   type ServerMessage,
 } from "../../shared/board";
@@ -121,6 +123,22 @@ export default defineRoom({
 
         if (event.type === "item.move") {
           const item = { ...existing, x: event.x, y: event.y };
+          if (!validItemPosition(item, item.kind === "line" ? item : undefined)) {
+            return { type: "board.error", reason: "position" } as const;
+          }
+          await txn.put(key, item);
+          return { type: "item.updated", item, movedBy: peer } as const;
+        }
+
+        if (event.type === "item.resize") {
+          if (existing.kind !== "line") return { type: "board.error", reason: "kind" } as const;
+          if (sameLineGeometry(existing, event.geometry)) {
+            return { type: "item.updated", item: existing, movedBy: peer } as const;
+          }
+          if (!sameLineGeometry(existing, event.base)) {
+            return { type: "board.error", reason: "conflict" } as const;
+          }
+          const item = { ...existing, ...event.geometry };
           await txn.put(key, item);
           return { type: "item.updated", item, movedBy: peer } as const;
         }
@@ -134,7 +152,14 @@ export default defineRoom({
         if (event.baseContent && !sameItemContent(existing, event.baseContent)) {
           return { type: "board.error", reason: "conflict" } as const;
         }
-        const item = { ...event.content, id, x: existing.x, y: existing.y };
+        let item;
+        if (event.content.kind !== "line") {
+          item = { ...event.content, id, x: existing.x, y: existing.y };
+        } else if (existing.kind === "line") {
+          item = { ...existing, ...event.content };
+        } else {
+          return { type: "board.error", reason: "kind" } as const;
+        }
         await txn.put(key, item);
         return { type: "item.updated", item } as const;
       });
