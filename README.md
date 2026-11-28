@@ -28,9 +28,12 @@ Choose **Add line** to add a straight line or arrow. Select it on the board, the
 
 ```sh
 pnpm typecheck
+pnpm test --run
 pnpm build
 pnpm preview
 ```
+
+`pnpm typecheck` runs `prepare:types`, which generates Void types with `void prepare` and loads the Vite config to generate Nuxt UI types before running `vue-tsc`.
 
 ## Deploy to Cloudflare
 

@@ -15,10 +15,12 @@ export default defineConfig({
     ],
     link: [{ rel: "icon", href: "/icon.svg", type: "image/svg+xml" }],
   },
-  cloudflare: {
-    name: "void-board",
+  worker: {
     compatibility_date: "2026-11-16",
     compatibility_flags: ["nodejs_compat"],
+  },
+  cloudflare: {
+    name: "void-board",
     routes: [],
     workers_dev: true,
     preview_urls: true,
